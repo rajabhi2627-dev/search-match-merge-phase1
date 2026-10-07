@@ -2,8 +2,8 @@
 Local SQLite storage (data/matching.db). Uses Python's built-in sqlite3 module.
 
 Tables
-  master_records : the ~1,000 master entities
-  test_records   : the 100 generated incoming records + ground truth
+  master_records : the 1,000 FEBRL master entities
+  test_records   : the 100 incoming test records + ground truth
   match_results  : output of running the matcher on the test records
   monitoring_results : 6 monthly batches used for Week 4 performance monitoring
   meta           : which dataset the database was built from
@@ -35,21 +35,20 @@ def init_db():
 
     If the database was built from a different dataset, all tables are rebuilt.
     """
+    version = f"{C.DATASET_NAME} v{C.SCHEMA_VERSION}"
     with get_connection() as conn:
-        if _stored_dataset(conn) != C.DATASET_NAME:
+        if _stored_dataset(conn) != version:
             for table in ["master_records", "test_records", "match_results", "monitoring_results", "meta"]:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-            conn.execute("INSERT INTO meta VALUES ('dataset', ?)", (C.DATASET_NAME,))
+            conn.execute("INSERT INTO meta VALUES ('dataset', ?)", (version,))
         conn.execute(
             """CREATE TABLE IF NOT EXISTS master_records (
                    entity_id     INTEGER PRIMARY KEY,
                    name          TEXT,
-                   email         TEXT,
-                   phone         TEXT,
+                   soc_sec_id    TEXT,
                    address       TEXT,
                    date_of_birth TEXT,
-                   company       TEXT,
                    city          TEXT
                )"""
         )

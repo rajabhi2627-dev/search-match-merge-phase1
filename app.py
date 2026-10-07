@@ -76,9 +76,8 @@ def page_search(master_df, master):
     st.header("Search & Match")
     st.write("Enter an incoming record. The system normalises it, searches the master database for candidates, "
              "scores every field with its own method and returns MATCH, MANUAL REVIEW or NO MATCH.")
-    st.caption(f"Master data: {len(master_df):,} people from the {C.DATASET_NAME} benchmark. FEBRL has no email, "
-               "phone or company - the Phone / ID field holds the FEBRL social security ID; email and company "
-               "can be left empty.")
+    st.caption(f"Master data: {len(master_df):,} people from the {C.DATASET_NAME} benchmark. "
+               "The form uses exactly the FEBRL person fields.")
 
     with st.expander("Load a FEBRL test record into the form"):
         options = {f"{rec['test_record_id']} - {rec['name']} ({rec['source_id']}, {rec['scenario']})": rec
@@ -90,13 +89,11 @@ def page_search(master_df, master):
         col1, col2 = st.columns(2)
         with col1:
             st.text_input("Name", key="in_name")
-            st.text_input("Email", key="in_email")
-            st.text_input("Phone / ID", key="in_phone")
-            st.text_input("Address", key="in_address")
+            st.text_input("Soc. Sec. ID", key="in_soc_sec_id")
+            st.text_input("Address", key="in_address", placeholder="street number, street, postcode")
         with col2:
-            st.text_input("Date of Birth", key="in_date_of_birth", placeholder="YYYY-MM-DD or DD/MM/YYYY")
-            st.text_input("Company", key="in_company")
-            st.text_input("City", key="in_city")
+            st.text_input("Date of Birth", key="in_date_of_birth", placeholder="YYYYMMDD, YYYY-MM-DD or DD/MM/YYYY")
+            st.text_input("City / Suburb", key="in_city")
         submitted = st.form_submit_button("Search & Match", type="primary")
 
     if submitted:
@@ -206,11 +203,11 @@ The ground truth comes from the benchmark itself: FEBRL record `rec-N-dup-0` is 
     st.subheader("Matching results")
     view = results.rename(columns={
         "test_record_id": "Test Record ID", "source_id": "FEBRL Record", "input_name": "Input Name",
-        "input_phone": "Input Phone / ID", "predicted_entity_id": "Predicted Entity", "true_entity_id": "True Entity",
+        "input_soc_sec_id": "Input Soc. Sec. ID", "predicted_entity_id": "Predicted Entity", "true_entity_id": "True Entity",
         "match_score": "Match Score", "decision": "Predicted Decision", "true_match_status": "True Status",
         "outcome": "Correct / Incorrect", "best_candidate_id": "Best Candidate", "scenario": "Scenario",
     })
-    st.dataframe(view[["Test Record ID", "FEBRL Record", "Input Name", "Input Phone / ID", "Predicted Entity",
+    st.dataframe(view[["Test Record ID", "FEBRL Record", "Input Name", "Input Soc. Sec. ID", "Predicted Entity",
                        "True Entity", "Match Score", "Predicted Decision", "True Status", "Correct / Incorrect",
                        "Best Candidate", "Scenario"]], hide_index=True, width="stretch")
     st.caption("Predicted Entity is filled only for MATCH decisions. For MANUAL REVIEW, 'Best Candidate' is the "
@@ -348,40 +345,36 @@ National University (Christen, 2008). FEBRL-4 has 5,000 original person records 
 | Project field | FEBRL column(s) |
 |---|---|
 | Name | given_name + surname |
-| Phone / ID | soc_sec_id (strong numeric identifier, compared digit by digit like a phone number) |
+| Soc. Sec. ID | soc_sec_id (strong numeric identifier, compared digit by digit) |
 | Address | street_number + address_1 + address_2 + postcode |
 | Date of birth | date_of_birth (YYYYMMDD) |
 | City | suburb |
-| Email, Company | not available in FEBRL - empty, so excluded from the score |
 
+Only FEBRL's own fields are used - nothing is invented or added.
 - **Master database:** {C.MASTER_RECORD_COUNT:,} FEBRL originals (fixed random sample).
 - **Test set:** {C.TEST_MATCH_COUNT} duplicates of master people (true MATCH) + {C.TEST_NO_MATCH_COUNT} duplicates of
   people not in the master (true NO MATCH).
-- Because email and company are missing, the remaining weights (70%) are rescaled to 100%:
-  Name and Phone / ID ≈ 35.7% each, Address ≈ 14.3%, DOB and City ≈ 7.1% each.
 """)
 
     st.subheader("1. Normalisation")
     st.markdown("""
 The same rules are applied to master records and incoming records.
-- **Text** (name, address, company, city): lowercase, trim spaces, replace punctuation with spaces, collapse multiple spaces.
-- **Address**: common abbreviations are expanded (Rd → road, St → street, MG → mahatma gandhi, Sec → sector, Ngr → nagar).
-- **Company**: legal suffixes are removed (Pvt, Private, Ltd, Limited, LLP, Inc).
-- **City**: old names are mapped to current ones (Bangalore → bengaluru, Bombay → mumbai, Gurgaon → gurugram ...).
-- **Phone / ID**: keep digits only; for phone numbers remove a leading `00`, a `91` country code (12 digits) or a trunk `0` (11 digits).
-- **Email**: lowercase and remove all spaces.
+- **Text** (name, address, city): lowercase, trim spaces, replace punctuation with spaces, collapse multiple spaces.
+- **Address**: common street abbreviations are expanded (Rd → road, St → street, Ave → avenue, Cres → crescent, Pl → place ...).
+- **Soc. Sec. ID**: keep digits only (spaces and dashes are removed).
 - **Date of birth**: converted to `YYYY-MM-DD` (FEBRL `YYYYMMDD` and day-first formats such as 12/04/1998 are accepted). Invalid dates → missing.
 """)
 
     st.subheader("2. Candidate search (blocking)")
     st.markdown(f"""
 A master record becomes a candidate if **at least one** rule is true:
-1. Exact phone match
-2. Exact email match
-3. Similar name (WRatio ≥ {C.CANDIDATE_NAME_MIN})
-4. Same city **and** partly similar name (WRatio ≥ {C.CANDIDATE_CITY_NAME_MIN})
+1. Exact Soc. Sec. ID match
+2. Similar name (WRatio ≥ {C.CANDIDATE_NAME_MIN})
+3. Same city **and** partly similar name (WRatio ≥ {C.CANDIDATE_CITY_NAME_MIN})
 
-Candidates with exact identifier hits come first, then by name similarity; at most {C.MAX_CANDIDATES} are fully scored.
+Blocking only decides **who is compared** - an exact ID is a quick way to find the person. The ID is then
+**scored** digit by digit (section 3-6), so an ID with a typo can still count once the person is found by name.
+Candidates with an exact ID hit come first, then by name similarity; at most {C.MAX_CANDIDATES} are fully scored.
 """)
 
     st.subheader("3-6. Exact matching, field-specific fuzzy matching, thresholds and edit distances")
@@ -392,12 +385,11 @@ Candidates with exact identifier hits come first, then by name similarity; at mo
                                 "Threshold": cfg["threshold"], "Max distance": cfg["max_distance"],
                                 "Weight": f"{C.FIELD_WEIGHTS[f]:.0%}"}
                                for f, cfg in C.FIELD_CONFIG.items()]), hide_index=True)
-    diffs = ", ".join(f"{k} digit(s) different = {v}" for k, v in C.PHONE_SCORE_BY_DIGIT_DIFF.items())
+    edits = ", ".join(f"{k} digit edit(s) = {v}" for k, v in C.ID_SCORE_BY_DIGIT_EDITS.items())
     st.markdown(f"""
-- **Name / Company - WRatio:** tolerant of spelling mistakes, word order and partial strings.
-- **Email - Levenshtein:** character edits; a strong identifier, so the threshold is high.
-- **Phone - digit comparison (not generic fuzzy):** {diffs}; more = 0. If the lengths differ, the last
-  {C.PHONE_LAST_N_DIGITS} digits identical = {C.PHONE_LAST_N_SCORE}. A phone "agrees" at ≥ {C.FIELD_CONFIG['phone']['threshold']}.
+- **Name - WRatio:** tolerant of spelling mistakes, word order and partial strings.
+- **Soc. Sec. ID - digit comparison (not generic fuzzy):** count the digits that must be changed, added or removed:
+  {edits}; more = 0 (a different ID). This tolerates a typing slip but not a different number.
 - **Address - Token Set Ratio:** ignores word order and extra or missing words.
 - **Date of birth - exact:** same = 100, different = 0.
 - **City - exact, then Ratio:** catches small typos such as "Ptna".
@@ -406,16 +398,16 @@ Candidates with exact identifier hits come first, then by name similarity; at mo
 
     st.subheader("7-8. Field-level scores and weighted score")
     st.latex(r"\text{Overall} = \frac{\sum_{f \in \text{present}} \text{score}_f \times w_f}{\sum_{f \in \text{present}} w_f}")
-    st.write("With all fields present this is simply 0.25×Name + 0.25×Email + 0.25×Phone + 0.10×Address + "
-             "0.05×DOB + 0.05×Company + 0.05×City (always between 0 and 100).")
+    st.write("With all fields present this is simply 0.35×Name + 0.35×Soc. Sec. ID + 0.15×Address + "
+             "0.075×DOB + 0.075×City (always between 0 and 100).")
 
     st.subheader("9. Conflict detection")
     st.markdown(f"""
 | Rule | Condition | Effect |
 |---|---|---|
-| 1. Strong identifiers disagree | one of Name / Email / Phone ≥ {C.STRONG_AGREE_SCORE} while another < {C.STRONG_DISAGREE_SCORE} | MANUAL REVIEW |
+| 1. Strong identifiers disagree | Name or Soc. Sec. ID ≥ {C.STRONG_AGREE_SCORE} while the other < {C.STRONG_DISAGREE_SCORE} | MANUAL REVIEW |
 | 2. Date of birth differs | DOB present on both sides and different | MANUAL REVIEW |
-| 3. Identifiers point to different people | exact phone → one entity, exact email → another entity | MANUAL REVIEW |
+| 3. Identifiers point to different people | exact Soc. Sec. ID → one entity, best overall score → another entity | MANUAL REVIEW |
 | 4. Too little evidence | compared fields carry < {C.MIN_EVIDENCE_WEIGHT:.0%} of the total weight | MATCH not allowed → MANUAL REVIEW |
 
 Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below that the result is NO MATCH anyway.

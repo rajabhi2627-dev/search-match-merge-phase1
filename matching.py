@@ -30,24 +30,14 @@ import config as C
 ADDRESS_ABBREVIATIONS = {
     "rd": "road",
     "st": "street",
-    "mg": "mahatma gandhi",
-    "nr": "near",
-    "opp": "opposite",
+    "ave": "avenue",
+    "cres": "crescent",
+    "cct": "circuit",
+    "pl": "place",
+    "ct": "court",
+    "dr": "drive",
+    "hwy": "highway",
     "apt": "apartment",
-    "sec": "sector",
-    "ngr": "nagar",
-    "no": "",
-}
-
-COMPANY_SUFFIXES = {"pvt", "private", "ltd", "limited", "llp", "inc"}
-
-CITY_ALIASES = {
-    "bangalore": "bengaluru",
-    "bombay": "mumbai",
-    "calcutta": "kolkata",
-    "madras": "chennai",
-    "gurgaon": "gurugram",
-    "poona": "pune",
 }
 
 DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d %b %Y", "%d %B %Y", "%Y%m%d"]
@@ -67,34 +57,17 @@ def normalize_text(value):
     return text.strip()
 
 
-def normalize_email(value):
-    """Lowercase and remove every space."""
+def normalize_id(value):
+    """Keep digits only: "530 4218", "530-4218" -> "5304218"."""
     if _is_blank(value):
         return ""
-    return re.sub(r"\s+", "", str(value).lower())
-
-
-def normalize_phone(value):
-    """Keep digits only and bring Indian numbers to a plain 10-digit form.
-
-    "+91 98765-43210", "0091 9876543210", "098765 43210" -> "9876543210"
-    """
-    if _is_blank(value):
-        return ""
-    digits = re.sub(r"\D", "", str(value))
-    if digits.startswith("00"):
-        digits = digits[2:]
-    if len(digits) == 12 and digits.startswith("91"):
-        digits = digits[2:]
-    elif len(digits) == 11 and digits.startswith("0"):
-        digits = digits[1:]
-    return digits
+    return re.sub(r"\D", "", str(value))
 
 
 def normalize_dob(value):
-    """Convert any supported date format to YYYY-MM-DD. Unparseable -> "" (missing).
+    """Convert any supported date format to YYYY-MM-DD. Invalid or unparseable -> "" (missing).
 
-    Day-first formats (DD/MM/YYYY) are assumed, as is usual in India.
+    FEBRL uses YYYYMMDD. Day-first formats (DD/MM/YYYY) are assumed for slashes and dashes.
     """
     if _is_blank(value):
         return ""
@@ -110,31 +83,17 @@ def normalize_dob(value):
 
 
 def normalize_address(value):
-    """Text normalisation + expansion of common abbreviations (Rd -> road, MG -> mahatma gandhi)."""
+    """Text normalisation + expansion of common abbreviations (Rd -> road, St -> street, Cres -> crescent)."""
     words = [ADDRESS_ABBREVIATIONS.get(w, w) for w in normalize_text(value).split()]
-    return " ".join(w for w in words if w)
-
-
-def normalize_company(value):
-    """Text normalisation + removal of legal suffixes (Pvt, Ltd, Limited ...)."""
-    words = [w for w in normalize_text(value).split() if w not in COMPANY_SUFFIXES]
     return " ".join(words)
-
-
-def normalize_city(value):
-    """Text normalisation + mapping of old city names to the current name."""
-    city = normalize_text(value)
-    return CITY_ALIASES.get(city, city)
 
 
 NORMALIZERS = {
     "name": normalize_text,
-    "email": normalize_email,
-    "phone": normalize_phone,
+    "soc_sec_id": normalize_id,
     "address": normalize_address,
     "date_of_birth": normalize_dob,
-    "company": normalize_company,
-    "city": normalize_city,
+    "city": normalize_text,
 }
 
 
@@ -179,22 +138,10 @@ def compare_name(a, b):
     return _fuzzy_compare("name", a, b, fuzz.WRatio(a, b))
 
 
-def compare_email(a, b):
-    if a == b:
-        return _result("email", 100.0, 100.0, 0, True, "exact match")
-    return _fuzzy_compare("email", a, b, Levenshtein.normalized_similarity(a, b) * 100)
-
-
 def compare_address(a, b):
     if a == b:
         return _result("address", 100.0, 100.0, 0, True, "exact match")
     return _fuzzy_compare("address", a, b, fuzz.token_set_ratio(a, b))
-
-
-def compare_company(a, b):
-    if a == b:
-        return _result("company", 100.0, 100.0, 0, True, "exact match")
-    return _fuzzy_compare("company", a, b, fuzz.WRatio(a, b))
 
 
 def compare_city(a, b):
@@ -203,27 +150,19 @@ def compare_city(a, b):
     return _fuzzy_compare("city", a, b, fuzz.ratio(a, b))
 
 
-def compare_phone(a, b):
-    """Digit-level comparison of phone numbers / numeric IDs (no generic fuzzy matching).
+def compare_id(a, b):
+    """Digit-level comparison of the social security ID (no generic fuzzy matching).
 
-    1. Exact normalised match                      -> 100
-    2. Same length: count differing positions      -> 1 digit 90, 2 digits 75, more -> 0
-    3. Otherwise, last 7 digits identical          -> 80
-    4. Anything else                               -> 0
+    Count the digit edits (change, insert or delete one digit) needed to turn one ID into the other:
+    0 edits -> 100, 1 edit -> 90, 2 edits -> 75, more -> 0.
     """
     if a == b:
-        return _result("phone", 100.0, 100.0, 0, True, "exact match")
-    threshold = C.FIELD_CONFIG["phone"]["threshold"]
-    n = C.PHONE_LAST_N_DIGITS
-    if len(a) == len(b):
-        diff = sum(x != y for x, y in zip(a, b))
-        score = float(C.PHONE_SCORE_BY_DIGIT_DIFF.get(diff, 0))
-        note = f"{diff} digit(s) differ -> {score:.0f}"
-        return _result("phone", score, score, diff, score >= threshold, note)
-    if len(a) >= n and len(b) >= n and a[-n:] == b[-n:]:
-        score = float(C.PHONE_LAST_N_SCORE)
-        return _result("phone", score, score, Levenshtein.distance(a, b), True, f"last {n} digits identical")
-    return _result("phone", 0.0, 0.0, Levenshtein.distance(a, b), False, "numbers are different")
+        return _result("soc_sec_id", 100.0, 100.0, 0, True, "exact match")
+    edits = Levenshtein.distance(a, b)
+    score = float(C.ID_SCORE_BY_DIGIT_EDITS.get(edits, 0))
+    agrees = score >= C.FIELD_CONFIG["soc_sec_id"]["threshold"]
+    note = f"{edits} digit edit(s) -> {score:.0f}" if agrees else f"{edits} digit edits - different ID -> 0"
+    return _result("soc_sec_id", score, score, edits, agrees, note)
 
 
 def compare_dob(a, b):
@@ -235,11 +174,9 @@ def compare_dob(a, b):
 
 COMPARATORS = {
     "name": compare_name,
-    "email": compare_email,
-    "phone": compare_phone,
+    "soc_sec_id": compare_id,
     "address": compare_address,
     "date_of_birth": compare_dob,
-    "company": compare_company,
     "city": compare_city,
 }
 
@@ -270,7 +207,7 @@ def weighted_score(field_scores):
         for f in field_scores
     }
     overall = round(sum(contributions.values()), 2)
-    return overall, round(evidence_weight, 2), contributions
+    return overall, round(evidence_weight, 3), contributions
 
 
 # ==================================================================
@@ -285,20 +222,17 @@ def prepare_master(master_records):
 def find_candidates(norm_input, master):
     """Return [(master_item, [reasons])] for records that satisfy at least one rule:
 
-    1. Exact phone match
-    2. Exact email match
-    3. Similar name (WRatio >= CANDIDATE_NAME_MIN)
-    4. Same city AND name WRatio >= CANDIDATE_CITY_NAME_MIN
+    1. Exact Soc. Sec. ID match
+    2. Similar name (WRatio >= CANDIDATE_NAME_MIN)
+    3. Same city AND name WRatio >= CANDIDATE_CITY_NAME_MIN
     """
     found = []
     for item in master:
         m = item["norm"]
         reasons = []
         name_sim = fuzz.WRatio(norm_input["name"], m["name"]) if norm_input["name"] else 0
-        if norm_input["phone"] and norm_input["phone"] == m["phone"]:
-            reasons.append("exact phone")
-        if norm_input["email"] and norm_input["email"] == m["email"]:
-            reasons.append("exact email")
+        if norm_input["soc_sec_id"] and norm_input["soc_sec_id"] == m["soc_sec_id"]:
+            reasons.append("exact Soc. Sec. ID")
         if name_sim >= C.CANDIDATE_NAME_MIN:
             reasons.append(f"similar name ({name_sim:.0f})")
         elif norm_input["city"] and norm_input["city"] == m["city"] and name_sim >= C.CANDIDATE_CITY_NAME_MIN:
@@ -318,8 +252,8 @@ def find_candidates(norm_input, master):
 def candidate_conflicts(field_scores):
     """Conflict rules for a single candidate.
 
-    Rule 1: one strong identifier (name/email/phone) clearly agrees (>= 90)
-            while another clearly disagrees (< 50).
+    Rule 1: one strong identifier (name / Soc. Sec. ID) clearly agrees (>= 90)
+            while the other clearly disagrees (< 50).
     Rule 2: date of birth present on both sides but different.
     """
     conflicts = []
@@ -358,11 +292,11 @@ def score_candidate(norm_input, item, reasons):
 
 
 def cross_candidate_conflicts(scored):
-    """Rule 3: exact phone and exact email point to two different entities."""
-    phone_ids = [c["entity_id"] for c in scored if c["field_scores"]["phone"] == 100]
-    email_ids = [c["entity_id"] for c in scored if c["field_scores"]["email"] == 100]
-    if phone_ids and email_ids and phone_ids[0] != email_ids[0]:
-        return [f"Phone points to entity {phone_ids[0]} but email points to entity {email_ids[0]}"]
+    """Rule 3: the Soc. Sec. ID matches one entity exactly, but the best overall score belongs to another."""
+    id_ids = [c["entity_id"] for c in scored if c["field_scores"]["soc_sec_id"] == 100]
+    best_id = scored[0]["entity_id"]
+    if id_ids and id_ids[0] != best_id:
+        return [f"Soc. Sec. ID points to entity {id_ids[0]} but the best overall score is entity {best_id}"]
     return []
 
 

@@ -6,43 +6,40 @@ Change values here - nothing else in the project hard-codes them.
 from pathlib import Path
 
 # ------------------------------------------------------------------
-# Local storage (everything stays on this laptop)
+# Storage
 # ------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 DB_PATH = DATA_DIR / "matching.db"
 
 # ------------------------------------------------------------------
-# Field weights (must add up to 1.0)
+# Fields - exactly the person fields available in the FEBRL-4 benchmark
 # ------------------------------------------------------------------
-NAME_WEIGHT = 0.25
-EMAIL_WEIGHT = 0.25
-PHONE_WEIGHT = 0.25
-ADDRESS_WEIGHT = 0.10
-DOB_WEIGHT = 0.05
-COMPANY_WEIGHT = 0.05
-CITY_WEIGHT = 0.05
-
-FIELDS = ["name", "email", "phone", "address", "date_of_birth", "company", "city"]
-
-FIELD_WEIGHTS = {
-    "name": NAME_WEIGHT,
-    "email": EMAIL_WEIGHT,
-    "phone": PHONE_WEIGHT,
-    "address": ADDRESS_WEIGHT,
-    "date_of_birth": DOB_WEIGHT,
-    "company": COMPANY_WEIGHT,
-    "city": CITY_WEIGHT,
-}
+FIELDS = ["name", "soc_sec_id", "address", "date_of_birth", "city"]
 
 FIELD_LABELS = {
     "name": "Name",
-    "email": "Email",
-    "phone": "Phone / ID",
+    "soc_sec_id": "Soc. Sec. ID",
     "address": "Address",
     "date_of_birth": "DOB",
-    "company": "Company",
     "city": "City",
+}
+
+# ------------------------------------------------------------------
+# Field weights (must add up to 1.0)
+# ------------------------------------------------------------------
+NAME_WEIGHT = 0.35
+SOC_SEC_ID_WEIGHT = 0.35
+ADDRESS_WEIGHT = 0.15
+DOB_WEIGHT = 0.075
+CITY_WEIGHT = 0.075
+
+FIELD_WEIGHTS = {
+    "name": NAME_WEIGHT,
+    "soc_sec_id": SOC_SEC_ID_WEIGHT,
+    "address": ADDRESS_WEIGHT,
+    "date_of_birth": DOB_WEIGHT,
+    "city": CITY_WEIGHT,
 }
 
 # ------------------------------------------------------------------
@@ -54,34 +51,31 @@ FIELD_LABELS = {
 # ------------------------------------------------------------------
 FIELD_CONFIG = {
     "name":          {"method": "WRatio",           "threshold": 70,  "max_distance": 3},
-    "email":         {"method": "Levenshtein",      "threshold": 85,  "max_distance": 2},
-    "phone":         {"method": "Digit comparison", "threshold": 75,  "max_distance": 2},
+    "soc_sec_id":    {"method": "Digit comparison", "threshold": 75,  "max_distance": 2},
     "address":       {"method": "Token Set Ratio",  "threshold": 60,  "max_distance": 5},
     "date_of_birth": {"method": "Exact",            "threshold": 100, "max_distance": 0},
-    "company":       {"method": "WRatio",           "threshold": 70,  "max_distance": 3},
     "city":          {"method": "Ratio",            "threshold": 85,  "max_distance": 2},
 }
 
-# Phone / ID scoring (digit comparison on normalised numbers of equal length)
-PHONE_SCORE_BY_DIGIT_DIFF = {0: 100, 1: 90, 2: 75}   # differing digit positions -> score
-PHONE_LAST_N_DIGITS = 7                              # last-N-digit fallback rule
-PHONE_LAST_N_SCORE = 80
+# Soc. Sec. ID scoring: number of digit edits (change / insert / delete one digit) -> score.
+# More edits than listed here -> 0.
+ID_SCORE_BY_DIGIT_EDITS = {0: 100, 1: 90, 2: 75}
 
 # ------------------------------------------------------------------
 # Candidate search (blocking)
 # ------------------------------------------------------------------
-CANDIDATE_NAME_MIN = 70        # rule 3: name WRatio >= this
-CANDIDATE_CITY_NAME_MIN = 50   # rule 4: same city AND name WRatio >= this
+CANDIDATE_NAME_MIN = 70        # rule 2: name WRatio >= this
+CANDIDATE_CITY_NAME_MIN = 50   # rule 3: same city AND name WRatio >= this
 MAX_CANDIDATES = 25            # keep at most this many candidates for full scoring
 TOP_N_DISPLAY = 3
 
 # ------------------------------------------------------------------
 # Conflict detection
 # ------------------------------------------------------------------
-STRONG_FIELDS = ["name", "email", "phone"]
+STRONG_FIELDS = ["name", "soc_sec_id"]
 STRONG_AGREE_SCORE = 90        # a strong field "clearly agrees" at or above this
 STRONG_DISAGREE_SCORE = 50     # a strong field "clearly disagrees" below this
-MIN_EVIDENCE_WEIGHT = 0.60     # fields present on both sides must carry >= 60% of weight
+MIN_EVIDENCE_WEIGHT = 0.70     # fields present on both sides must carry >= 70% of the weight
 
 # ------------------------------------------------------------------
 # Decision thresholds
@@ -98,10 +92,9 @@ NO_MATCH = "NO MATCH"
 # Dataset: FEBRL-4 public record-linkage benchmark
 #   dataset4a.csv = 5,000 original person records
 #   dataset4b.csv = 5,000 corrupted duplicates; rec-N-dup-0 is the same person as rec-N-org
-# FEBRL has no email, phone or company. Its social security ID is used as the strong
-# numeric identifier in the "phone" field; email and company stay empty (excluded from the score).
 # ------------------------------------------------------------------
 DATASET_NAME = "FEBRL-4"
+SCHEMA_VERSION = "2"           # change to force the database to be rebuilt
 FEBRL_DIR = DATA_DIR / "febrl"
 FEBRL_ORIGINALS = FEBRL_DIR / "dataset4a.csv"
 FEBRL_DUPLICATES = FEBRL_DIR / "dataset4b.csv"

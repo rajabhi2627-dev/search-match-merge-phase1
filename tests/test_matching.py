@@ -19,58 +19,49 @@ def master():
 # ---------------- normalisation ----------------
 
 def test_text_normalization():
-    assert M.normalize_text("  Rahul   KUMAR. ") == "rahul kumar"
+    assert M.normalize_text("  Rachael   DENT. ") == "rachael dent"
     assert M.normalize_text(None) == ""
 
 
-def test_phone_normalization():
-    for raw in ["+91 98765 43210", "098765-43210", "0091 9876543210", "(98765) 43210", "9876543210"]:
-        assert M.normalize_phone(raw) == "9876543210"
-
-
-def test_email_normalization():
-    assert M.normalize_email("  Rahul.Kumar @GMAIL.com ") == "rahul.kumar@gmail.com"
+def test_id_normalization():
+    for raw in ["5304218", "530 4218", "530-4218", " 5304218 "]:
+        assert M.normalize_id(raw) == "5304218"
 
 
 def test_dob_normalization():
-    assert M.normalize_dob("12/04/1998") == "1998-04-12"
-    assert M.normalize_dob("12 Apr 1998") == "1998-04-12"
     assert M.normalize_dob("19980412") == "1998-04-12"
+    assert M.normalize_dob("12/04/1998") == "1998-04-12"
+    assert M.normalize_dob("1998-04-12") == "1998-04-12"
+    assert M.normalize_dob("19981341") == ""  # invalid date -> missing
     assert M.normalize_dob("not a date") == ""
+
+
+def test_address_normalization():
+    assert M.normalize_address("12 Banjine St, 2600") == "12 banjine street 2600"
 
 
 # ---------------- field comparison ----------------
 
 def test_exact_matching():
-    assert M.compare_field("email", "a.b@gmail.com", "a.b@gmail.com")["score"] == 100
-    assert M.compare_field("phone", "9876543210", "9876543210")["score"] == 100
+    assert M.compare_field("soc_sec_id", "5304218", "5304218")["score"] == 100
+    assert M.compare_field("city", "kellerberrin", "kellerberrin")["score"] == 100
 
 
 def test_name_fuzzy_matching():
-    assert M.compare_name("rahul kumar", "rahul kumr")["score"] >= 90
-    assert M.compare_name("rahul kumar", "sneha iyer")["score"] == 0
+    assert M.compare_name("rachael dent", "rachael dnet")["score"] >= 90
+    assert M.compare_name("rachael dent", "isabella white")["score"] == 0
 
 
-def test_email_fuzzy_matching():
-    assert M.compare_email("rahul.kumar@gmail.com", "rahul.kumar@gmai.com")["score"] >= 90
-
-
-def test_phone_digit_matching():
-    assert M.compare_phone("9876543210", "9876543211")["score"] == 90
-    assert M.compare_phone("9876543210", "9876543201")["score"] == 75
-    assert M.compare_phone("9876543210", "9123456789")["score"] == 0
+def test_id_digit_matching():
+    assert M.compare_id("5304218", "5304219")["score"] == 90   # one digit changed
+    assert M.compare_id("5304218", "530421")["score"] == 90    # one digit missing
+    assert M.compare_id("5304218", "5302418")["score"] == 75   # two digits swapped
+    assert M.compare_id("5304218", "9123456")["score"] == 0    # different ID
 
 
 def test_address_fuzzy_matching():
-    a = M.normalize_address("12 MG Road Patna")
-    b = M.normalize_address("12 Mahatma Gandhi Road Patna")
-    assert M.compare_address(a, b)["score"] == 100
-    assert M.compare_address("12 boring road patna", "patna boring road 12")["score"] == 100
-
-
-def test_company_fuzzy_matching():
-    a, b = M.normalize_company("ABC Technologies Pvt Ltd"), M.normalize_company("ABC Tech")
-    assert M.compare_company(a, b)["score"] >= C.FIELD_CONFIG["company"]["threshold"]
+    assert M.compare_address("1 banjine street 2600", "banjine street 1 2600")["score"] == 100
+    assert M.compare_address("1 banjine street 2600", "4 banjine street 2600")["score"] >= 90
 
 
 def test_dob_matching():
@@ -82,23 +73,25 @@ def test_dob_matching():
 # ---------------- score, conflicts, decision ----------------
 
 def test_score_calculation():
-    scores = {"name": 100, "email": 100, "phone": 100, "address": 50, "date_of_birth": 100, "company": 0, "city": 100}
+    scores = {"name": 100, "soc_sec_id": 100, "address": 50, "date_of_birth": 100, "city": 100}
     overall, evidence, _ = M.weighted_score(scores)
-    assert overall == pytest.approx(25 + 25 + 25 + 5 + 5 + 0 + 5)
+    assert overall == pytest.approx(35 + 35 + 7.5 + 7.5 + 7.5)
     assert evidence == 1.0
 
 
 def test_missing_field_reweighting():
-    scores = {"name": 100, "email": 100, "phone": 100, "address": 100, "date_of_birth": None, "company": 100, "city": 100}
+    scores = {"name": 100, "soc_sec_id": 100, "address": 100, "date_of_birth": None, "city": 100}
     overall, evidence, _ = M.weighted_score(scores)
     assert overall == pytest.approx(100)
-    assert evidence == pytest.approx(0.95)
+    assert evidence == pytest.approx(0.925)
+    _, evidence, _ = M.weighted_score({**scores, "soc_sec_id": None})
+    assert evidence < C.MIN_EVIDENCE_WEIGHT  # without the ID a MATCH is not allowed
 
 
 def test_conflict_rules():
-    scores = {"name": 95, "email": 20, "phone": 100, "address": 80, "date_of_birth": 100, "company": 80, "city": 100}
+    scores = {"name": 95, "soc_sec_id": 0, "address": 80, "date_of_birth": 100, "city": 100}
     assert any("Strong identifiers" in c for c in M.candidate_conflicts(scores))
-    scores = {"name": 90, "email": 100, "phone": 100, "address": 80, "date_of_birth": 0, "company": 80, "city": 100}
+    scores = {"name": 90, "soc_sec_id": 100, "address": 80, "date_of_birth": 0, "city": 100}
     assert any("Date of birth" in c for c in M.candidate_conflicts(scores))
 
 
@@ -126,7 +119,7 @@ def test_end_to_end_master_record_matches_itself(master):
 def test_febrl_record_mapping():
     record = G.generate_master_records()[0]
     assert set(C.FIELDS) <= set(record)
-    assert record["email"] == "" and record["company"] == ""
+    assert "email" not in record and "company" not in record
     assert M.normalize_dob(record["date_of_birth"]) != ""
 
 

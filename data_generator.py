@@ -47,17 +47,15 @@ def load_febrl():
 
 
 def to_record(row):
-    """Map a FEBRL row onto the 7 matching fields."""
+    """Map a FEBRL row onto the 5 matching fields."""
     name = " ".join(p for p in (_clean(row["given_name"]), _clean(row["surname"])) if p)
     address = " ".join(p for p in (_clean(row["street_number"]), _clean(row["address_1"]),
                                    _clean(row["address_2"]), _clean(row["postcode"])) if p)
     return {
         "name": name,
-        "email": "",
-        "phone": _clean(row["soc_sec_id"]),
+        "soc_sec_id": _clean(row["soc_sec_id"]),
         "address": address,
         "date_of_birth": _clean(row["date_of_birth"]),
-        "company": "",
         "city": _clean(row["suburb"]),
     }
 

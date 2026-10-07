@@ -39,17 +39,15 @@ function: `matching.match_record()`.
 
 | Field | Rule |
 |---|---|
-| Text (name, address, company, city) | lowercase, trim, punctuation → space, collapse spaces |
-| Address | expand abbreviations: Rd → road, St → street, MG → mahatma gandhi, Sec → sector, Ngr → nagar |
-| Company | drop legal suffixes: Pvt, Private, Ltd, Limited, LLP, Inc |
-| City | map old names: Bangalore → bengaluru, Bombay → mumbai, … |
-| Phone / ID | digits only; for phone numbers drop leading `00`, `91` country code or trunk `0` |
-| Email | lowercase, remove all spaces |
+| Text (name, address, city) | lowercase, trim, punctuation → space, collapse spaces |
+| Address | expand street abbreviations: Rd → road, St → street, Ave → avenue, Cres → crescent, Pl → place, … |
+| Soc. Sec. ID | digits only (spaces and dashes removed) |
 | Date of birth | convert to `YYYY-MM-DD` (`YYYYMMDD` and day-first formats accepted); invalid → missing |
 
 **Candidate search**: a master record becomes a candidate if at least one rule is true:
-exact phone/ID, exact email, similar name (WRatio ≥ 70), or same city + partly similar name (WRatio ≥ 50).
-At most 25 candidates are fully scored.
+exact Soc. Sec. ID, similar name (WRatio ≥ 70), or same city + partly similar name (WRatio ≥ 50).
+At most 25 candidates are fully scored. Blocking only decides who is compared; the ID is then scored digit by
+digit, so an ID with a typo still counts once the person is found by name.
 
 ## 4. Dataset – FEBRL-4 benchmark
 
@@ -64,11 +62,12 @@ the open-source `recordlinkage` Python package.
 | Project field | FEBRL column(s) |
 |---|---|
 | Name | given_name + surname |
-| Phone / ID | soc_sec_id (strong numeric identifier, compared digit by digit) |
+| Soc. Sec. ID | soc_sec_id (strong numeric identifier, compared digit by digit) |
 | Address | street_number + address_1 + address_2 + postcode |
 | Date of birth | date_of_birth |
 | City | suburb |
-| Email, Company | not in FEBRL → empty → excluded from the score |
+
+Only FEBRL's own fields are used - no extra fields are invented.
 
 **Database** `data/matching.db` (SQLite, built automatically on first start; rebuilt if the dataset changes):
 
@@ -86,20 +85,17 @@ Every field is first compared exactly (identical normalised values → 100). Oth
 | Field | Method | Why |
 |---|---|---|
 | Name | RapidFuzz `WRatio` | tolerant of typos, word order, partial names |
-| Email | Levenshtein similarity | strong identifier, character-level edits only |
-| Phone / ID | Digit comparison (custom) | numbers are not words; generic fuzzy matching is misleading |
+| Soc. Sec. ID | Digit comparison (custom) | numbers are not words; generic fuzzy matching is misleading |
 | Address | RapidFuzz `token_set_ratio` | handles word order, extra/missing words |
 | DOB | Exact | a different date means a different person |
-| Company | RapidFuzz `WRatio` | handles spelling variants and abbreviations |
 | City | Exact, then `ratio` | small typos only |
 
-**Phone / ID logic**: exact = 100; same length with 1 differing digit = 90; 2 differing digits = 75; more = 0.
-If lengths differ, last 7 digits identical = 80, otherwise 0.
+**Soc. Sec. ID logic**: count the digit edits (change, add or remove one digit): 0 = 100, 1 = 90, 2 = 75,
+more = 0 (a different ID).
 
 **Missing values**: a field that is empty on either side is left out and the remaining weights are rescaled.
-With FEBRL (no email, no company) the effective weights are Name 35.7%, Phone/ID 35.7%, Address 14.3%,
-DOB 7.1%, City 7.1%. If the compared fields carry less than 60% of the total weight, the result is at most
-MANUAL REVIEW.
+If the compared fields carry less than 70% of the total weight (for example the ID is missing), the result is
+at most MANUAL REVIEW.
 
 ## 6. Distance parameters
 
@@ -109,25 +105,23 @@ similarity. Otherwise the field score is **0**.
 | Field | Method | Threshold | Max distance |
 |---|---|---|---|
 | Name | WRatio | 70 | 3 |
-| Email | Levenshtein | 85 | 2 |
-| Phone / ID | Digit comparison | 75 (custom) | 2 digits |
+| Soc. Sec. ID | Digit comparison | 75 (custom) | 2 digits |
 | Address | Token Set Ratio | 60 | 5 |
 | DOB | Exact | 100 | 0 |
-| Company | WRatio | 70 | 3 |
 | City | Ratio | 85 | 2 |
 
 ## 7. Field weights
 
-Name 25%, Email 25%, Phone/ID 25%, Address 10%, DOB 5%, Company 5%, City 5% (total 100%).
+Name 35%, Soc. Sec. ID 35%, Address 15%, DOB 7.5%, City 7.5% (total 100%).
 
 ## 8. Decision thresholds
 
 **Conflict rules** (any of these blocks an automatic MATCH):
 
-1. Strong identifiers disagree: one of name/email/phone ≥ 90 while another < 50.
+1. Strong identifiers disagree: name or Soc. Sec. ID ≥ 90 while the other < 50.
 2. Date of birth present on both sides and different.
-3. Exact phone points to one entity, exact email to another.
-4. Too little evidence (compared fields < 60% of the total weight).
+3. The Soc. Sec. ID matches one entity exactly, but the best overall score belongs to another entity.
+4. Too little evidence (compared fields < 70% of the total weight).
 
 **Score gap** = best score − second-best score. A gap < 5 → MANUAL REVIEW, unless there is no meaningful
 second candidate (none, or its score < 65).

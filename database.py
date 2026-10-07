@@ -5,6 +5,8 @@ Tables
   master_records : the ~1,000 master entities
   test_records   : the 100 generated incoming records + ground truth
   match_results  : output of running the matcher on the test records
+  monitoring_results : 6 monthly batches used for Week 4 performance monitoring
+  meta           : which dataset the database was built from
 """
 import sqlite3
 
@@ -21,9 +23,24 @@ def get_connection():
     return sqlite3.connect(C.DB_PATH)
 
 
+def _stored_dataset(conn):
+    if not _table_exists(conn, "meta"):
+        return None
+    row = conn.execute("SELECT value FROM meta WHERE key = 'dataset'").fetchone()
+    return row[0] if row else None
+
+
 def init_db():
-    """Create the database and fill the master table if it does not exist yet."""
+    """Create the database and fill the master table if it does not exist yet.
+
+    If the database was built from a different dataset, all tables are rebuilt.
+    """
     with get_connection() as conn:
+        if _stored_dataset(conn) != C.DATASET_NAME:
+            for table in ["master_records", "test_records", "match_results", "monitoring_results", "meta"]:
+                conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("INSERT INTO meta VALUES ('dataset', ?)", (C.DATASET_NAME,))
         conn.execute(
             """CREATE TABLE IF NOT EXISTS master_records (
                    entity_id     INTEGER PRIMARY KEY,
@@ -89,11 +106,27 @@ def save_match_results(df):
         df.to_sql("match_results", conn, if_exists="replace", index=False)
 
 
-def load_match_results():
+def _load_results(table, order_by):
     with get_connection() as conn:
-        if not _table_exists(conn, "match_results"):
+        if not _table_exists(conn, table):
             return pd.DataFrame()
-        df = pd.read_sql_query("SELECT * FROM match_results ORDER BY test_record_id", conn)
+        df = pd.read_sql_query(f"SELECT * FROM {table} ORDER BY {order_by}", conn)
     for col in ["true_entity_id", "predicted_entity_id", "best_candidate_id"]:
         df[col] = df[col].astype("Int64")
+    return df
+
+
+def load_match_results():
+    return _load_results("match_results", "test_record_id")
+
+
+def save_monitoring_results(df):
+    with get_connection() as conn:
+        df.to_sql("monitoring_results", conn, if_exists="replace", index=False)
+
+
+def load_monitoring_results():
+    df = _load_results("monitoring_results", "rowid")
+    if not df.empty:
+        df["disputed"] = df["disputed"].astype(bool)
     return df

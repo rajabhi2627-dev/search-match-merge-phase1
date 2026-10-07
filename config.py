@@ -38,7 +38,7 @@ FIELD_WEIGHTS = {
 FIELD_LABELS = {
     "name": "Name",
     "email": "Email",
-    "phone": "Phone",
+    "phone": "Phone / ID",
     "address": "Address",
     "date_of_birth": "DOB",
     "company": "Company",
@@ -62,8 +62,7 @@ FIELD_CONFIG = {
     "city":          {"method": "Ratio",            "threshold": 85,  "max_distance": 2},
 }
 
-# Phone scoring (digit comparison on normalised 10-digit numbers)
-PHONE_LENGTH = 10
+# Phone / ID scoring (digit comparison on normalised numbers of equal length)
 PHONE_SCORE_BY_DIGIT_DIFF = {0: 100, 1: 90, 2: 75}   # differing digit positions -> score
 PHONE_LAST_N_DIGITS = 7                              # last-N-digit fallback rule
 PHONE_LAST_N_SCORE = 80
@@ -96,31 +95,51 @@ MANUAL_REVIEW = "MANUAL REVIEW"
 NO_MATCH = "NO MATCH"
 
 # ------------------------------------------------------------------
-# Synthetic data generation
+# Dataset: FEBRL-4 public record-linkage benchmark
+#   dataset4a.csv = 5,000 original person records
+#   dataset4b.csv = 5,000 corrupted duplicates; rec-N-dup-0 is the same person as rec-N-org
+# FEBRL has no email, phone or company. Its social security ID is used as the strong
+# numeric identifier in the "phone" field; email and company stay empty (excluded from the score).
 # ------------------------------------------------------------------
-MASTER_RECORD_COUNT = 1000
-MASTER_SEED = 2024
-FIRST_ENTITY_ID = 10001
+DATASET_NAME = "FEBRL-4"
+FEBRL_DIR = DATA_DIR / "febrl"
+FEBRL_ORIGINALS = FEBRL_DIR / "dataset4a.csv"
+FEBRL_DUPLICATES = FEBRL_DIR / "dataset4b.csv"
+SAMPLE_SEED = 42
 
+MASTER_RECORD_COUNT = 1000       # FEBRL originals loaded into the master database
+
+# Test set: duplicates whose original IS in the master (true MATCH)
+# plus duplicates whose original is NOT in the master (true NO MATCH = new person).
 TEST_RECORD_COUNT = 100
-TEST_SEED = 42
+TEST_MATCH_COUNT = 75
+TEST_NO_MATCH_COUNT = TEST_RECORD_COUNT - TEST_MATCH_COUNT
 
-# Number of test records per scenario (must add up to TEST_RECORD_COUNT).
-# true_status says what the ground truth is for that scenario.
-TEST_SCENARIOS = {
-    # ~60 records based on existing entities
-    "Clear match":                {"count": 13, "true_status": MATCH},
-    "Name spelling error":        {"count": 10, "true_status": MATCH},
-    "Email variation":            {"count": 8,  "true_status": MATCH},
-    "Phone formatting":           {"count": 10, "true_status": MATCH},
-    "Address variation":          {"count": 9,  "true_status": MATCH},
-    "Company spelling variation": {"count": 8,  "true_status": MATCH},
-    # ~20 noisy / ambiguous records
-    "Multiple noisy fields":      {"count": 10, "true_status": MATCH},
-    "Changed contact details":    {"count": 2,  "true_status": MATCH},
-    "Ambiguous - sparse record":  {"count": 5,  "true_status": MATCH},
-    "Ambiguous - family member":  {"count": 5,  "true_status": NO_MATCH},
-    # ~20 records that should be NO MATCH
-    "New person":                 {"count": 15, "true_status": NO_MATCH},
-    "Look-alike (same name)":     {"count": 5,  "true_status": NO_MATCH},
+# ------------------------------------------------------------------
+# Week 4 - Performance monitoring
+# ------------------------------------------------------------------
+# One batch of 100 new FEBRL duplicates per month (75 existing people, 25 new people).
+# Data-quality drift: the duplicates are ordered by how many fields FEBRL corrupted,
+# and later months receive more heavily corrupted records.
+MONITORING_PERIODS = ["Jan-26", "Feb-26", "Mar-26", "Apr-26", "May-26", "Jun-26"]
+MONITORING_MATCH_COUNT = 75
+MONITORING_NO_MATCH_COUNT = 25
+
+# Share of wrong decisions that customers actually complain about (simulated, fixed seed).
+#   FP = wrong merge      -> "this is not my account"
+#   FN = missed duplicate -> "I already have an account"
+DISPUTE_RAISE_RATE = {"FP": 0.8, "FN": 0.5}
+
+# KPI thresholds. direction "higher" = higher is better.
+#   higher: Green >= green, Amber >= amber, otherwise Red
+#   lower : Green <= green, Amber <= amber, otherwise Red
+KPI_THRESHOLDS = {
+    "hit_rate":         {"direction": "higher", "green": 0.60, "amber": 0.50},
+    "precision":        {"direction": "higher", "green": 0.98, "amber": 0.95},
+    "recall":           {"direction": "higher", "green": 0.95, "amber": 0.90},
+    "fpr":              {"direction": "lower",  "green": 0.02, "amber": 0.05},
+    "fnr":              {"direction": "lower",  "green": 0.05, "amber": 0.10},
+    "review_rate":      {"direction": "lower",  "green": 0.15, "amber": 0.25},
+    "merge_error_rate": {"direction": "lower",  "green": 0.01, "amber": 0.03},
+    "dispute_rate":     {"direction": "lower",  "green": 0.01, "amber": 0.03},
 }

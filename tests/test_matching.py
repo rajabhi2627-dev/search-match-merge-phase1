@@ -35,6 +35,7 @@ def test_email_normalization():
 def test_dob_normalization():
     assert M.normalize_dob("12/04/1998") == "1998-04-12"
     assert M.normalize_dob("12 Apr 1998") == "1998-04-12"
+    assert M.normalize_dob("19980412") == "1998-04-12"
     assert M.normalize_dob("not a date") == ""
 
 
@@ -114,22 +115,52 @@ def test_score_gap_logic():
     assert M.make_decision(91, 2, False, [], False)[0] == C.MATCH  # no meaningful second candidate
 
 
-def test_end_to_end_example(master):
-    record = {"name": "Rahul Kumr", "email": "rahul.kumar@gmai.com", "phone": "+91 98765-43210",
-              "address": "12 Mahatma Gandhi Road Patna", "date_of_birth": "12/04/1998",
-              "company": "ABC Tech", "city": "Patna"}
+def test_end_to_end_master_record_matches_itself(master):
+    item = master[0]
+    record = {f: item["raw"][f] for f in C.FIELDS}
     result = M.match_record(record, master)
     assert result["decision"] == C.MATCH
-    assert result["predicted_entity_id"] == C.FIRST_ENTITY_ID
+    assert result["predicted_entity_id"] == item["entity_id"]
+
+
+def test_febrl_record_mapping():
+    record = G.generate_master_records()[0]
+    assert set(C.FIELDS) <= set(record)
+    assert record["email"] == "" and record["company"] == ""
+    assert M.normalize_dob(record["date_of_birth"]) != ""
 
 
 # ---------------- data and metrics ----------------
 
 def test_test_data_generation(master):
-    records = G.generate_test_records(G.generate_master_records())
+    records = G.generate_test_records()
+    master_ids = {m["entity_id"] for m in master}
     assert len(records) == C.TEST_RECORD_COUNT
-    assert all(r["true_match_status"] in (C.MATCH, C.NO_MATCH) for r in records)
-    assert records == G.generate_test_records(G.generate_master_records())  # reproducible
+    matches = [r for r in records if r["true_match_status"] == C.MATCH]
+    assert len(matches) == C.TEST_MATCH_COUNT
+    assert all(r["true_entity_id"] in master_ids for r in matches)
+    assert all(r["true_entity_id"] is None for r in records if r["true_match_status"] == C.NO_MATCH)
+    assert records == G.generate_test_records()  # reproducible
+
+
+def test_monitoring_batches_do_not_overlap_test_set():
+    test_ids = {r["source_id"] for r in G.generate_test_records()}
+    batches = G.generate_monitoring_batches()
+    assert list(batches) == C.MONITORING_PERIODS
+    seen = set()
+    for records in batches.values():
+        assert len(records) == C.MONITORING_MATCH_COUNT + C.MONITORING_NO_MATCH_COUNT
+        ids = {r["source_id"] for r in records}
+        assert not ids & test_ids and not ids & seen
+        seen |= ids
+
+
+def test_rag_status():
+    assert P.rag_status("recall", 0.97) == "Green"
+    assert P.rag_status("recall", 0.92) == "Amber"
+    assert P.rag_status("recall", 0.80) == "Red"
+    assert P.rag_status("dispute_rate", 0.0) == "Green"
+    assert P.rag_status("dispute_rate", 0.05) == "Red"
 
 
 def test_performance_metrics():

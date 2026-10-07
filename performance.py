@@ -11,9 +11,12 @@ How each test record is classified
 Binary metrics (Accuracy, Precision, Recall, F1, FPR, FNR) are calculated on the
 automatically decided records only (TP + FP + TN + FN). The manual review rate is reported separately.
 """
+import random
+
 import pandas as pd
 
 import config as C
+from data_generator import generate_monitoring_batches
 from matching import match_record
 
 TP, FP, TN, FN, REVIEW = "TP", "FP", "TN", "FN", "REVIEW"
@@ -81,6 +84,7 @@ def run_test_matching(test_records, master):
                                 rec["true_match_status"], true_entity)
         row = {
             "test_record_id": rec["test_record_id"],
+            "source_id": rec.get("source_id", ""),
             **{f"input_{f}": rec[f] for f in C.FIELDS},
             "scenario": rec["scenario"],
             "true_entity_id": true_entity,
@@ -141,5 +145,127 @@ def scenario_summary(results):
         avg_score=("match_score", "mean"),
     )
     summary["avg_score"] = summary["avg_score"].round(1)
-    order = list(C.TEST_SCENARIOS)
-    return summary.reindex([s for s in order if s in summary.index]).reset_index()
+    return summary.sort_index().reset_index()
+
+
+# ==================================================================
+# WEEK 4 - PERFORMANCE MONITORING KPIs
+# ==================================================================
+
+KPI_DICTIONARY = {
+    "hit_rate": {
+        "label": "HIT Rate",
+        "meaning": "Share of incoming records automatically linked to an existing entity",
+        "formula": "MATCH decisions / total records",
+    },
+    "precision": {
+        "label": "Precision",
+        "meaning": "Of the automatic matches, how many were the right entity",
+        "formula": "TP / (TP + FP)",
+    },
+    "recall": {
+        "label": "Recall",
+        "meaning": "Of the existing people (automatically decided), how many were found",
+        "formula": "TP / (TP + FN)",
+    },
+    "fpr": {
+        "label": "False Positive Rate",
+        "meaning": "Share of new people wrongly matched to someone",
+        "formula": "FP / (FP + TN)",
+    },
+    "fnr": {
+        "label": "False Negative Rate",
+        "meaning": "Share of existing people the algorithm missed",
+        "formula": "FN / (FN + TP)",
+    },
+    "review_rate": {
+        "label": "Manual Review Rate",
+        "meaning": "Workload sent to human reviewers",
+        "formula": "MANUAL REVIEW decisions / total records",
+    },
+    "merge_error_rate": {
+        "label": "Merge Error Rate",
+        "meaning": "Share of automatic matches that would merge two different people",
+        "formula": "FP / MATCH decisions",
+    },
+    "dispute_rate": {
+        "label": "Dispute Rate",
+        "meaning": "Share of records where a customer complains about the result",
+        "formula": "disputes / total records",
+    },
+}
+
+
+def simulate_disputes(results, period=""):
+    """Deterministic dispute simulation: a wrong decision becomes a customer dispute with the
+    probability in DISPUTE_RAISE_RATE. Each record has its own fixed random seed."""
+    raised = []
+    for r in results.itertuples():
+        rate = C.DISPUTE_RAISE_RATE.get(r.outcome_code, 0.0)
+        raised.append(rate > 0 and random.Random(f"{period}|{r.test_record_id}").random() < rate)
+    return pd.Series(raised, index=results.index, dtype=bool)
+
+
+def compute_kpis(results, period=""):
+    m = metrics_for_results(results)
+    total = len(results)
+    match_decisions = int((results["decision"] == C.MATCH).sum())
+    disputes = int(simulate_disputes(results, period).sum())
+    return {
+        "records": total,
+        "hit_rate": safe_div(match_decisions, total),
+        "precision": m["precision"],
+        "recall": m["recall"],
+        "fpr": m["fpr"],
+        "fnr": m["fnr"],
+        "review_rate": m["review_rate"],
+        "merge_error_rate": safe_div(m["FP"], match_decisions),
+        "dispute_rate": safe_div(disputes, total),
+        "disputes": disputes,
+        "TP": m["TP"], "FP": m["FP"], "TN": m["TN"], "FN": m["FN"], "review": m["review"],
+    }
+
+
+def rag_status(kpi, value):
+    t = C.KPI_THRESHOLDS[kpi]
+    if t["direction"] == "higher":
+        return "Green" if value >= t["green"] else "Amber" if value >= t["amber"] else "Red"
+    return "Green" if value <= t["green"] else "Amber" if value <= t["amber"] else "Red"
+
+
+def run_monitoring(master):
+    """Match one batch of 100 new records per month, using the same match_record() as everywhere else."""
+    frames = []
+    for period, records in generate_monitoring_batches().items():
+        results = run_test_matching(pd.DataFrame(records), master)
+        results.insert(0, "period", period)
+        results["disputed"] = simulate_disputes(results, period)
+        frames.append(results)
+    return pd.concat(frames, ignore_index=True)
+
+
+def monthly_kpis(monitoring_results):
+    rows = []
+    for period in C.MONITORING_PERIODS:
+        batch = monitoring_results[monitoring_results["period"] == period]
+        if len(batch):
+            rows.append({"period": period, **compute_kpis(batch, period)})
+    return pd.DataFrame(rows)
+
+
+def trend_observations(kpis, min_change=0.02):
+    """Rule-based observations: KPIs that are not Green in the latest month, or moved noticeably."""
+    first, last = kpis.iloc[0], kpis.iloc[-1]
+    notes = []
+    for key, info in KPI_DICTIONARY.items():
+        start, end = first[key], last[key]
+        status = rag_status(key, end)
+        change = end - start
+        if status == "Green" and abs(change) < min_change:
+            continue
+        direction = "rose" if change > 0 else "fell" if change < 0 else "stayed"
+        movement = f"{direction} from {start:.1%} to {end:.1%}" if direction != "stayed" else f"stayed at {end:.1%}"
+        notes.append({"KPI": info["label"], "Status": status,
+                      "Observation": f"{info['label']} {movement} between {first['period']} and {last['period']}."})
+    order = {"Red": 0, "Amber": 1, "Green": 2}
+    return sorted(notes, key=lambda n: order[n["Status"]])

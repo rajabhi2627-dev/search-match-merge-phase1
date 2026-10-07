@@ -50,7 +50,7 @@ CITY_ALIASES = {
     "poona": "pune",
 }
 
-DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d %b %Y", "%d %B %Y"]
+DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d %b %Y", "%d %B %Y", "%Y%m%d"]
 
 
 def _is_blank(value):
@@ -204,18 +204,18 @@ def compare_city(a, b):
 
 
 def compare_phone(a, b):
-    """Digit-level phone comparison (no generic fuzzy matching).
+    """Digit-level comparison of phone numbers / numeric IDs (no generic fuzzy matching).
 
-    1. Exact normalised match                        -> 100
-    2. Same length (10): count differing positions   -> 1 digit 90, 2 digits 75, more -> 0
-    3. Otherwise, last 7 digits identical            -> 80
-    4. Anything else                                 -> 0
+    1. Exact normalised match                      -> 100
+    2. Same length: count differing positions      -> 1 digit 90, 2 digits 75, more -> 0
+    3. Otherwise, last 7 digits identical          -> 80
+    4. Anything else                               -> 0
     """
     if a == b:
-        return _result("phone", 100.0, 100.0, 0, True, "exact 10-digit match")
+        return _result("phone", 100.0, 100.0, 0, True, "exact match")
     threshold = C.FIELD_CONFIG["phone"]["threshold"]
     n = C.PHONE_LAST_N_DIGITS
-    if len(a) == len(b) == C.PHONE_LENGTH:
+    if len(a) == len(b):
         diff = sum(x != y for x, y in zip(a, b))
         score = float(C.PHONE_SCORE_BY_DIGIT_DIFF.get(diff, 0))
         note = f"{diff} digit(s) differ -> {score:.0f}"

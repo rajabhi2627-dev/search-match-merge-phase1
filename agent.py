@@ -35,6 +35,8 @@ reporting rules. Finish by calling submit_report.
 Rules:
 - Use ONLY numbers that appear in the evidence or in tool outputs, quoted exactly as given (percentages have one
   decimal). Never calculate, estimate or round new numbers.
+- Attach each value to its own KPI. A negative change is a decrease, a positive change an increase. Counts (cases,
+  records, errors) are not percentages; only values from fields ending in _pct get a % sign.
 - overall_status and breaches must match the THRESHOLDS section for the assessed period.
 - If DATA INTEGRITY says the assessed period is not usable, overall_status is "Insufficient data": list the issues in
   data_issues, explain them, and draw no conclusions on the affected KPIs.
@@ -210,6 +212,180 @@ def _traceable(x, allowed):
     return float(x).is_integer() and any(abs(x - a) < 0.5 for a in allowed)
 
 
+# ---------------- consistency checks: right value, right direction, right unit ----------------
+
+KPI_PATTERNS = {
+    "hit_rate": r"hit rate",
+    "precision": r"precision",
+    "recall": r"recall",
+    "type1_error": r"\btype (?:i|1) error|false positive rate",
+    "type2_error": r"\btype (?:ii|2) error|false negative rate",
+    "review_rate": r"review rate",
+    "incorrect_merge_rate": r"incorrect merge rate",
+    "dispute_rate": r"dispute rate",
+}
+KPI_RE = re.compile("|".join(f"(?P<{k}>{p})" for k, p in KPI_PATTERNS.items()), re.I)
+UNIT_RE = re.compile(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s*(%|pp\b|percentage points?\b)", re.I)
+INCREASE = r"increas\w*|ris(?:e|es|ing|en)|rose|rais\w*|grew|grow\w*|jump\w*|climb\w*|higher"
+DECREASE = r"decreas\w*|declin\w*|drop\w*|fell|fall\w*|lower\w*|reduc\w*|cut|cuts"
+DIRECTION_RE = re.compile(rf"\b(?:(?P<up>{INCREASE})|(?P<down>{DECREASE}))\b", re.I)
+FROM_TO_RE = re.compile(r"from\s+(-?\d+(?:\.\d+)?)\s*%?(?:\s*\([^)]*\))?\s+to\s+(-?\d+(?:\.\d+)?)\s*%", re.I)
+CLAUSE_BOUNDARY = re.compile(r"[.;:|\n](?:\s|$)|,\s")
+
+
+def _normalise(text):
+    text = re.sub("[\u00a0\u2007\u2009\u202f]", " ", text)
+    return re.sub("[\u2010\u2011\u2012\u2013\u2212]", "-", text)
+
+
+def _evidence_sets(tool_outputs):
+    """Per KPI: allowed level values (%) and change values (pp); plus all values that are percentages."""
+    level = {k: set() for k in KPI_PATTERNS}
+    change = {k: set() for k in KPI_PATTERNS}
+    percent, shared_pct, shared_pp = set(), set(), {C.ANOMALY_CHANGE_PP}
+
+    def add(target, value):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            target.add(round(float(value), 4))
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            kpi = obj.get("kpi")
+            if kpi in level:
+                for f in ("value_pct", "green_limit_pct", "amber_limit_pct", "first_pct", "last_pct"):
+                    add(level[kpi], obj.get(f))
+                for f in ("change_pp", "largest_monthly_change_pp"):
+                    add(change[kpi], obj.get(f))
+            for k in KPI_PATTERNS:
+                add(level[k], obj.get(f"{k}_pct"))
+                for f in ("before_pct", "after_pct"):
+                    if isinstance(obj.get(f), dict):
+                        add(level[k], obj[f].get(k))
+                if isinstance(obj.get("impact_pp"), dict):
+                    add(change[k], obj["impact_pp"].get(k))
+            for key, value in obj.items():
+                if key.endswith("_pct"):
+                    _numbers_in(value, percent)
+                walk(value)
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                walk(v)
+        elif isinstance(obj, str):
+            for value, unit in UNIT_RE.findall(_normalise(obj)):
+                (shared_pct if unit == "%" else shared_pp).add(round(float(value), 4))
+
+    for output in tool_outputs:
+        walk(output)
+    percent |= shared_pct | {float(C.MATCH_THRESHOLD), float(C.REVIEW_THRESHOLD)}
+    for k in KPI_PATTERNS:
+        level[k] |= shared_pct
+        change[k] |= shared_pp
+    return level, change, percent
+
+
+def _close(x, allowed):
+    return any(abs(abs(x) - abs(a)) <= 0.051 for a in allowed)
+
+
+def _clause_start(text, pos):
+    starts = [m.end() for m in CLAUSE_BOUNDARY.finditer(text, 0, pos)]
+    return starts[-1] if starts else 0
+
+
+def _direction(text, clause_start, number_pos, number_end):
+    """'up' / 'down': the word right after the number ("9.1 pp increase"), else the last one before it."""
+    after = DIRECTION_RE.search(text[number_end:number_end + 15])
+    if after and not CLAUSE_BOUNDARY.search(text[number_end:number_end + after.start()]):
+        return "up" if after.group("up") else "down"
+    before = list(DIRECTION_RE.finditer(text, clause_start, number_pos))
+    if before:
+        return "up" if before[-1].group("up") else "down"
+    return None
+
+
+ATTACHED_KPI = re.compile(r"\s*(?:[\w-]+\s+){0,2}?(?:in|of|for)\s+(?:the\s+)?(?=" + KPI_RE.pattern + ")", re.I)
+
+
+def _label(kpi):
+    return T.P.KPI_DICTIONARY[kpi]["label"]
+
+
+def consistency_problems(report, tool_outputs, ctx):
+    """KPI values paired with the right KPI, increase/decrease matching the sign, % only on percentages."""
+    text = _normalise(report)
+    level, change, percent = _evidence_sets(tool_outputs)
+    percent |= {float(v) for v in (ctx.get("proposed_change") or {}).values()}
+    signed = {k: set() for k in KPI_PATTERNS}  # signed changes per KPI, for the direction words
+    for output in tool_outputs:
+        if not isinstance(output, dict):
+            continue
+        for trend in output.get("trends") or []:
+            if trend.get("kpi") in signed:
+                signed[trend["kpi"]] |= {trend.get("change_pp"), trend.get("largest_monthly_change_pp")} - {None}
+        proposed = output.get("proposed_change")
+        if isinstance(proposed, dict) and isinstance(proposed.get("impact_pp"), dict):
+            for k, v in proposed["impact_pp"].items():
+                if k in signed and v is not None:
+                    signed[k].add(v)
+
+    labels = list(KPI_RE.finditer(text))
+
+    def context(pos, end):
+        """KPIs a number at pos refers to and where its clause starts."""
+        attached = ATTACHED_KPI.match(text, end)
+        if attached:
+            kpi = KPI_RE.match(text, attached.end()).lastgroup
+            return {kpi}, _clause_start(text, pos)
+        s_start = max(text.rfind("\n", 0, pos), text.rfind(". ", 0, pos)) + 1
+        s_end = min([p for p in (text.find("\n", pos), text.find(". ", pos)) if p >= 0] or [len(text)])
+        before = [x for x in labels if s_start <= x.start() < pos]
+        if not before:
+            return set(), None
+        # "Recall and Type II error are 66.7% and 28.0%": any KPI named in the sentence is accepted
+        named = {x.lastgroup for x in labels if s_start <= x.start() < s_end}
+        return named, _clause_start(text, before[-1].start())
+
+    pairing, direction = [], []
+    for u in UNIT_RE.finditer(text):
+        kpis, clause = context(u.start(), u.end())
+        if not kpis:
+            continue
+        value, unit = float(u.group(1)), u.group(2).lower()
+        names = " / ".join(_label(k) for k in sorted(kpis))
+        quote = text[clause:u.end()].strip()[-150:]
+        if unit == "%":
+            if not _close(value, set().union(*(level[k] for k in kpis))):
+                pairing.append(f"'{quote}': {value}% is not a {names} value in the evidence.")
+            continue
+        if not _close(value, set().union(*(change[k] for k in kpis))):
+            pairing.append(f"'{quote}': {value} pp is not a {names} change in the evidence.")
+            continue
+        word = _direction(text, clause, u.start(), u.end())
+        matches = [(k, s) for k in kpis for s in signed[k] if s and abs(abs(s) - abs(value)) <= 0.051]
+        if word and matches and value >= 0 and all((s > 0) != (word == "up") for _, s in matches):
+            k, s = matches[0]
+            direction.append(f"'{quote}': the evidence shows {'an increase' if s > 0 else 'a decrease'} of "
+                             f"{abs(s)} pp for {_label(k)}, not {'an increase' if word == 'up' else 'a decrease'}.")
+    for ft in FROM_TO_RE.finditer(text):
+        kpis, clause = context(ft.start(), ft.start())
+        if not kpis:
+            continue
+        word = _direction(text, clause, ft.start(), ft.start())
+        a, b = float(ft.group(1)), float(ft.group(2))
+        if word and a != b and (b > a) != (word == "up"):
+            direction.append(f"'{text[clause:ft.end()].strip()[-150:]}' is described as "
+                             f"{'an increase' if word == 'up' else 'a decrease'}, but the value goes "
+                             f"{'up' if b > a else 'down'}.")
+
+    units = []
+    stripped = re.sub(r"\b[A-Z][a-z]{2}-\d{2}\b", " ", text)
+    for u in UNIT_RE.finditer(stripped):
+        if u.group(2) == "%" and not _close(float(u.group(1)), percent):
+            units.append(f"'{u.group(0)}' is written as a percentage, but {u.group(1)} is not a percentage in the "
+                         "evidence (it may be a count).")
+    return sorted(set(pairing)), sorted(set(direction)), sorted(set(units))
+
+
 def missing_sections(report):
     text = report.lower()
     return [s for s in REPORT_SECTIONS if s.lower() not in text]
@@ -230,8 +406,12 @@ def verify_report(submission, tool_outputs, ctx):
     claimed = {(b["kpi"], b["status"]) for b in submission.get("breaches", [])}
     actual = {(b["kpi"], b["status"]) for b in expected["breaches"]}
     missing = missing_sections(report)
+    pairing, direction, units = consistency_problems(report, tool_outputs, ctx)
     checks = {
         "numbers_traceable": not untraceable,
+        "kpi_values_paired": not pairing,
+        "directions_correct": not direction,
+        "percent_signs_correct": not units,
         "overall_status_correct": submission.get("overall_status") == expected["overall_status"],
         "breaches_correct": claimed == actual,
         "data_issues_reported": bool(submission.get("data_issues")) or not integrity["issues"],
@@ -241,6 +421,9 @@ def verify_report(submission, tool_outputs, ctx):
     if untraceable:
         problems.append(f"These numbers are not found in the evidence: {untraceable}. Remove them or quote "
                         "evidence values exactly.")
+    problems += [f"Wrong KPI value: {p}" for p in pairing]
+    problems += [f"Wrong direction: {p}" for p in direction]
+    problems += [f"Wrong unit: {p}" for p in units]
     if not checks["overall_status_correct"]:
         problems.append(f"overall_status '{submission.get('overall_status')}' does not match the THRESHOLDS "
                         f"section ('{expected['overall_status']}').")

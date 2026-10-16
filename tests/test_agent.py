@@ -80,6 +80,35 @@ def test_verify_report_catches_errors(setup):
     assert ver["checks"]["report_sections_present"] is False
 
 
+def _consistency(setup, sid, sentence, change=None):
+    ctx = {**_scenario(setup, sid)["ctx"], "proposed_change": change}
+    _, outputs, _ = A.gather_evidence(ctx)
+    return A.consistency_problems(sentence, outputs, ctx)
+
+
+def test_kpi_value_pairing(setup):
+    assert _consistency(setup, "S01", "Recall is 66.7% and the Type\u202fII error rate is 28.0%.") == ([], [], [])
+    pairing, _, _ = _consistency(setup, "S01", "Recall is 28.0% in Jun-26.")
+    assert pairing  # 28.0% is the Type II error, not recall
+    pairing, _, _ = _consistency(setup, "S01", "Recall moved by 4.4 pp.")
+    assert pairing
+
+
+def test_direction_matches_sign(setup):
+    change = {"review_threshold": 60}
+    ok = "Lowering the REVIEW threshold to 60 would reduce the Type II error by 9.1 pp."
+    bad = "Lowering the REVIEW threshold to 60 is expected to increase the Type II error by 9.1 pp."
+    assert _consistency(setup, "S12", ok, change)[1] == []
+    assert _consistency(setup, "S12", bad, change)[1]
+    assert _consistency(setup, "S01", "Recall dropped 33.3 pp since Jan-26.")[1] == []
+    assert _consistency(setup, "S01", "Recall rose from 100.0% to 66.7%.")[1]
+
+
+def test_percent_only_on_percentages(setup):
+    assert _consistency(setup, "S01", "Name replaced or very different explains 46.5% of exceptions.")[2] == []
+    assert _consistency(setup, "S01", "Name replaced or very different explains 40% of exceptions.")[2]
+
+
 def test_policy_retrieval():
     assert all(AV.retrieval_unit_checks())
 

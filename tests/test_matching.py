@@ -162,10 +162,29 @@ def test_performance_metrics():
     assert m["accuracy"] == pytest.approx(14 / 20)
     assert m["precision"] == pytest.approx(0.8)
     assert m["recall"] == pytest.approx(8 / 12)
-    assert m["fpr"] == pytest.approx(2 / 8)
-    assert m["fnr"] == pytest.approx(4 / 12)
     assert m["review_rate"] == pytest.approx(5 / 25)
     assert P.compute_metrics([])["precision"] == 0.0  # division by zero handled
+
+
+def test_document_metrics():
+    import pandas as pd
+    # 4 records: correct MATCH, wrong MATCH (new person), correct REVIEW, missed duplicate
+    results = pd.DataFrame({
+        "decision": [C.MATCH, C.MATCH, C.MANUAL_REVIEW, C.NO_MATCH],
+        "best_candidate_id": pd.array([1, 9, 3, 4], dtype="Int64"),
+        "true_entity_id": pd.array([1, None, 3, 4], dtype="Int64"),
+        "true_match_status": [C.MATCH, C.NO_MATCH, C.MATCH, C.MATCH],
+        "outcome_code": [P.TP, P.FP, P.REVIEW, P.FN],
+        "disputed": [False, True, False, True],
+    })
+    d = P.document_metrics(results)
+    assert d["matches_generated"] == 3 and d["confirmed"] == 2 and d["actual_matches"] == 3
+    assert d["hit_rate"] == pytest.approx(2 / 3)            # confirmed / matches generated
+    assert d["dispute_rate"] == pytest.approx(1 / 3)        # disputed matches / matches generated
+    assert d["incorrect_merge_rate"] == pytest.approx(1 / 3)
+    assert d["type1_error"] == pytest.approx(1 / 3)         # FP / matches generated
+    assert d["type2_error"] == pytest.approx(1 / 3)         # FN / actual matches
+    assert d["duplicate_disputes"] == 1
 
 
 def test_soundex_and_jaccard():

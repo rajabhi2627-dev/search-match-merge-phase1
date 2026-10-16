@@ -27,65 +27,16 @@ import config as C
 import matching as M
 import performance as P
 
-# Report definitions (validation report style):
-#   matches generated   = MATCH + MANUAL REVIEW decisions (potential matches put forward by the algorithm)
-#   confirmed matches   = generated matches whose best candidate is the true entity
-#   hit rate            = confirmed matches / matches generated
-#   disputed matches    = automatic matches the customer disputes ("does not belong to me")
-#   dispute rate        = disputed matches / matches generated
-#   incorrect merges    = automatic matches to the wrong entity or of a new person (FP)
-#   incorrect merge rate= incorrect merges / matches generated
-#   Type I error rate   = FP / (FP + TN)    (false positive)
-#   Type II error rate  = FN / (FN + TP)    (false negative)
-
+# All rates follow the validation report's formulas - see performance.document_metrics.
 METRIC_DEFINITIONS = pd.DataFrame([
     {"Metric": "Matches generated", "Formula": "MATCH + MANUAL REVIEW decisions"},
     {"Metric": "Confirmed matches", "Formula": "generated matches whose best candidate is the true person"},
-    {"Metric": "Hit rate", "Formula": "confirmed matches / matches generated"},
-    {"Metric": "Dispute rate", "Formula": "disputed automatic matches / matches generated"},
-    {"Metric": "Incorrect merge rate", "Formula": "wrong automatic matches (FP) / matches generated"},
-    {"Metric": "Type I error rate", "Formula": "FP / (FP + TN)  - new people wrongly matched"},
-    {"Metric": "Type II error rate", "Formula": "FN / (FN + TP)  - existing people missed"},
+    {"Metric": "Hit rate", "Formula": "confirmed matches / total matches generated × 100"},
+    {"Metric": "Dispute rate", "Formula": "disputed matches / total matches generated × 100"},
+    {"Metric": "Incorrect merge rate", "Formula": "incorrect merges / total matches generated × 100"},
+    {"Metric": "Type I error rate", "Formula": "false positives / total matches generated × 100"},
+    {"Metric": "Type II error rate", "Formula": "false negatives / total actual matches × 100"},
 ])
-
-
-# ==================================================================
-# Report-style metrics for any set of results
-# ==================================================================
-
-def _is_confirmed(results):
-    return (results["best_candidate_id"] == results["true_entity_id"]).fillna(False).astype(bool)
-
-
-def report_metrics(results):
-    generated = results["decision"].isin([C.MATCH, C.MANUAL_REVIEW])
-    confirmed = generated & _is_confirmed(results)
-    disputed = results["disputed"].astype(bool)
-    ownership_disputes = disputed & (results["decision"] == C.MATCH)
-    duplicate_disputes = disputed & (results["outcome_code"] == P.FN)
-    incorrect_merges = results["outcome_code"] == P.FP
-    m = P.metrics_for_results(results)
-    n_generated = int(generated.sum())
-    return {
-        "records": len(results),
-        "matches_generated": n_generated,
-        "auto_merged": int((results["decision"] == C.MATCH).sum()),
-        "manual_review": int((results["decision"] == C.MANUAL_REVIEW).sum()),
-        "new_subjects": int((results["decision"] == C.NO_MATCH).sum()),
-        "confirmed": int(confirmed.sum()),
-        "disputed_matches": int(ownership_disputes.sum()),
-        "duplicate_disputes": int(duplicate_disputes.sum()),
-        "incorrect_merges": int(incorrect_merges.sum()),
-        "hit_rate": P.safe_div(int(confirmed.sum()), n_generated),
-        "dispute_rate": P.safe_div(int(ownership_disputes.sum()), n_generated),
-        "incorrect_merge_rate": P.safe_div(int(incorrect_merges.sum()), n_generated),
-        "type1_error": m["fpr"],
-        "type2_error": m["fnr"],
-        "precision": m["precision"],
-        "recall": m["recall"],
-        "review_rate": m["review_rate"],
-        "TP": m["TP"], "FP": m["FP"], "TN": m["TN"], "FN": m["FN"],
-    }
 
 
 def by_period(results):
@@ -93,7 +44,7 @@ def by_period(results):
     for period in C.MONITORING_PERIODS:
         batch = results[results["period"] == period]
         if len(batch):
-            rows.append({"period": period, **report_metrics(batch)})
+            rows.append({"period": period, **P.document_metrics(batch)})
     return pd.DataFrame(rows)
 
 
@@ -102,7 +53,7 @@ def by_period(results):
 # ==================================================================
 
 def data_summary(results, master_count):
-    m = report_metrics(results)
+    m = P.document_metrics(results)
     return pd.DataFrame([
         ("Master records (existing subjects)", master_count),
         ("Customer records processed", m["records"]),
@@ -248,9 +199,9 @@ CHALLENGERS = {
 
 def run_benchmark(master, production_results):
     """Run every challenger on the same validation sample and summarise the results."""
-    rows = [{"Algorithm": PRODUCTION, **report_metrics(production_results)}]
+    rows = [{"Algorithm": PRODUCTION, **P.document_metrics(production_results)}]
     for name, comparators in CHALLENGERS.items():
-        rows.append({"Algorithm": name, **report_metrics(P.run_monitoring(master, comparators))})
+        rows.append({"Algorithm": name, **P.document_metrics(P.run_monitoring(master, comparators))})
     return pd.DataFrame(rows)
 
 
@@ -364,10 +315,10 @@ def threshold_calibration(results):
     rows = []
     for mt in C.CALIBRATION_MATCH_THRESHOLDS:
         rows.append({"Varied": "MATCH threshold", "MATCH threshold": mt, "REVIEW threshold": C.REVIEW_THRESHOLD,
-                     **report_metrics(redecide(results, mt, C.REVIEW_THRESHOLD))})
+                     **P.document_metrics(redecide(results, mt, C.REVIEW_THRESHOLD))})
     for rt in C.CALIBRATION_REVIEW_THRESHOLDS:
         rows.append({"Varied": "REVIEW threshold", "MATCH threshold": C.MATCH_THRESHOLD, "REVIEW threshold": rt,
-                     **report_metrics(redecide(results, C.MATCH_THRESHOLD, rt))})
+                     **P.document_metrics(redecide(results, C.MATCH_THRESHOLD, rt))})
     table = pd.DataFrame(rows)
     table["Current setting"] = ((table["MATCH threshold"] == C.MATCH_THRESHOLD)
                                 & (table["REVIEW threshold"] == C.REVIEW_THRESHOLD))
@@ -386,16 +337,16 @@ def observations(periods, contribution, benchmark, rca, quality):
         notes.append({"Area": area, "Status": "Satisfactory" if ok else "Needs attention", "Observation": text})
 
     first, last = periods.iloc[0], periods.iloc[-1]
-    add("Hit rate", periods["hit_rate"].min() >= 0.90,
+    add("Hit rate", periods["hit_rate"].min() >= C.KPI_THRESHOLDS["hit_rate"]["amber"],
         f"Hit rate ranged from {periods['hit_rate'].min():.1%} to {periods['hit_rate'].max():.1%} "
         f"({first['period']} {first['hit_rate']:.1%} -> {last['period']} {last['hit_rate']:.1%}).")
     add("Type I error", periods["type1_error"].max() < L["type1_error"],
         f"Type I (false positive) error rate: highest {periods['type1_error'].max():.1%} across all periods "
         f"(limit {L['type1_error']:.0%}).")
-    fnr_amber = C.KPI_THRESHOLDS["fnr"]["amber"]
-    add("Type II error", periods["type2_error"].max() <= fnr_amber,
+    type2_amber = C.KPI_THRESHOLDS["type2_error"]["amber"]
+    add("Type II error", periods["type2_error"].max() <= type2_amber,
         f"Type II (false negative) error rate moved from {first['type2_error']:.1%} to {last['type2_error']:.1%}; "
-        f"highest {periods['type2_error'].max():.1%} (tolerance {fnr_amber:.0%}). Missed matches rise as data "
+        f"highest {periods['type2_error'].max():.1%} (tolerance {type2_amber:.0%}). Missed matches rise as data "
         "quality worsens.")
     add("Disputes and incorrect merges",
         periods["dispute_rate"].max() < L["dispute_rate"]

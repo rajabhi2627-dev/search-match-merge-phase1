@@ -154,27 +154,36 @@ MANUAL REVIEW is excluded from the binary metrics and reported as the manual rev
 
 - Accuracy = (TP + TN) / (TP + FP + TN + FN)
 - Precision = TP / (TP + FP), Recall = TP / (TP + FN), F1 = 2PR / (P + R)
-- False Positive Rate = FP / (FP + TN), False Negative Rate = FN / (FN + TP)
+
+**Validation-report definitions** (used on every page). *Matches generated* = MATCH + MANUAL REVIEW decisions;
+*confirmed matches* = generated matches whose best candidate is the true person; *actual matches* = records
+whose person exists in the master.
+
+- Hit Rate = confirmed matches / total matches generated × 100
+- Dispute Rate = disputed matches / total matches generated × 100
+- Incorrect Merge Rate = incorrect merges / total matches generated × 100
+- Type I Error Rate = false positives / total matches generated × 100
+- Type II Error Rate = false negatives / total actual matches × 100
 
 ## 11. Week 4 – Performance monitoring
 
 | KPI | Formula | Green | Amber | Red |
 |---|---|---|---|---|
-| HIT Rate | MATCH decisions / total records | ≥ 60% | ≥ 50% | < 50% |
+| Hit Rate | confirmed matches / total matches generated | ≥ 95% | ≥ 90% | < 90% |
 | Precision | TP / (TP + FP) | ≥ 98% | ≥ 95% | < 95% |
 | Recall | TP / (TP + FN) | ≥ 95% | ≥ 90% | < 90% |
-| False Positive Rate | FP / (FP + TN) | ≤ 2% | ≤ 5% | > 5% |
-| False Negative Rate | FN / (FN + TP) | ≤ 5% | ≤ 10% | > 10% |
+| Type I Error Rate | false positives / total matches generated | ≤ 2% | ≤ 5% | > 5% |
+| Type II Error Rate | false negatives / total actual matches | ≤ 5% | ≤ 10% | > 10% |
 | Manual Review Rate | MANUAL REVIEW / total records | ≤ 15% | ≤ 25% | > 25% |
-| Merge Error Rate | FP / MATCH decisions | ≤ 1% | ≤ 3% | > 3% |
-| Dispute Rate | disputes / total records | ≤ 1% | ≤ 3% | > 3% |
+| Incorrect Merge Rate | incorrect merges / total matches generated | ≤ 0.5% | ≤ 1% | > 1% |
+| Dispute Rate | disputed matches / total matches generated | ≤ 2% | ≤ 3% | > 3% |
 
 - **Monthly batches:** 6 months, each with 75 duplicates of existing people + 25 new people, none used in
   the test set.
 - **Data-quality drift:** duplicates are ordered by the number of fields FEBRL corrupted; the first month
   receives the cleanest records, the last month the most corrupted.
-- **Disputes (simulated, fixed seed):** 80% of wrong merges and 50% of missed duplicates lead to a customer
-  complaint.
+- **Disputes (simulated, fixed seed):** 80% of wrong merges lead to a "does not belong to me" dispute (counted
+  in the dispute rate); 50% of missed duplicates lead to an "I already have an account" complaint (shown separately).
 - **Observations:** rule-based – every KPI that is not Green in the latest month, or moved by ≥ 2 percentage
   points, is reported.
 

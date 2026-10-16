@@ -8,8 +8,11 @@ How each test record is classified
   FN  predicted NO MATCH but the record truly belongs to an existing entity
   REVIEW  predicted MANUAL REVIEW - not an automatic decision, so it is neither correct nor incorrect.
 
-Binary metrics (Accuracy, Precision, Recall, F1, FPR, FNR) are calculated on the
-automatically decided records only (TP + FP + TN + FN). The manual review rate is reported separately.
+Accuracy, Precision, Recall and F1 are calculated on the automatically decided records only
+(TP + FP + TN + FN). The manual review rate is reported separately.
+
+Hit rate, dispute rate, incorrect merge rate, Type I and Type II error follow the definitions of the
+Search & Match validation report (see document_metrics).
 """
 import random
 
@@ -66,8 +69,6 @@ def compute_metrics(outcomes):
         "precision": precision,
         "recall": recall,
         "f1": safe_div(2 * precision * recall, precision + recall),
-        "fpr": safe_div(fp, fp + tn),
-        "fnr": safe_div(fn, fn + tp),
         "review_rate": safe_div(review, len(outcomes)),
     }
 
@@ -122,6 +123,62 @@ def metrics_for_results(results, review_as=None):
     return compute_metrics(outcomes)
 
 
+def reviews_as_no_match(results):
+    """Copy of the results in which every MANUAL REVIEW is treated as NO MATCH (sensitivity view)."""
+    out = results.copy()
+    out.loc[out["decision"] == C.MANUAL_REVIEW, "decision"] = C.NO_MATCH
+    out["outcome_code"] = [classify_outcome(r.decision, r.predicted_entity_id, r.true_match_status,
+                                            r.true_entity_id) for r in out.itertuples()]
+    return out
+
+
+def document_metrics(results, disputed=None):
+    """Metrics exactly as defined in the Search & Match validation report.
+
+    Matches generated    = MATCH + MANUAL REVIEW decisions (the algorithm proposes an existing person)
+    Confirmed matches    = generated matches whose best candidate is the true person
+    Hit rate             = confirmed matches / total matches generated
+    Dispute rate         = disputed matches / total matches generated
+    Incorrect merge rate = incorrect merges (FP) / total matches generated
+    Type I error rate    = false positives / total matches generated
+    Type II error rate   = false negatives / total actual matches (records that truly exist in the master)
+
+    disputed: optional boolean Series; defaults to the 'disputed' column of the results.
+    """
+    if disputed is None:
+        disputed = results["disputed"] if "disputed" in results else pd.Series(False, index=results.index)
+    disputed = disputed.astype(bool)
+    generated = results["decision"].isin([C.MATCH, C.MANUAL_REVIEW])
+    confirmed = generated & (results["best_candidate_id"] == results["true_entity_id"]).fillna(False).astype(bool)
+    codes = results["outcome_code"]
+    fp, fn = int((codes == FP).sum()), int((codes == FN).sum())
+    disputed_matches = int((disputed & (results["decision"] == C.MATCH)).sum())
+    n_generated = int(generated.sum())
+    actual_matches = int((results["true_match_status"] == C.MATCH).sum())
+    m = compute_metrics(codes)
+    return {
+        "records": len(results),
+        "matches_generated": n_generated,
+        "auto_merged": int((results["decision"] == C.MATCH).sum()),
+        "manual_review": int((results["decision"] == C.MANUAL_REVIEW).sum()),
+        "new_subjects": int((results["decision"] == C.NO_MATCH).sum()),
+        "actual_matches": actual_matches,
+        "confirmed": int(confirmed.sum()),
+        "disputed_matches": disputed_matches,
+        "duplicate_disputes": int((disputed & (codes == FN)).sum()),
+        "incorrect_merges": fp,
+        "hit_rate": safe_div(int(confirmed.sum()), n_generated),
+        "dispute_rate": safe_div(disputed_matches, n_generated),
+        "incorrect_merge_rate": safe_div(fp, n_generated),
+        "type1_error": safe_div(fp, n_generated),
+        "type2_error": safe_div(fn, actual_matches),
+        "precision": m["precision"],
+        "recall": m["recall"],
+        "review_rate": m["review_rate"],
+        "TP": m["TP"], "FP": m["FP"], "TN": m["TN"], "FN": m["FN"], "review": m["review"],
+    }
+
+
 def binary_confusion_matrix(metrics):
     """2x2 matrix. Rows = actual (should match / should not match), columns = predicted (MATCH / NO MATCH).
 
@@ -158,9 +215,9 @@ def scenario_summary(results):
 
 KPI_DICTIONARY = {
     "hit_rate": {
-        "label": "HIT Rate",
-        "meaning": "Share of incoming records automatically linked to an existing entity",
-        "formula": "MATCH decisions / total records",
+        "label": "Hit Rate",
+        "meaning": "Of the matches the algorithm proposed, how many were confirmed as the right person",
+        "formula": "confirmed matches / total matches generated",
     },
     "precision": {
         "label": "Precision",
@@ -172,30 +229,30 @@ KPI_DICTIONARY = {
         "meaning": "Of the existing people (automatically decided), how many were found",
         "formula": "TP / (TP + FN)",
     },
-    "fpr": {
-        "label": "False Positive Rate",
-        "meaning": "Share of new people wrongly matched to someone",
-        "formula": "FP / (FP + TN)",
+    "type1_error": {
+        "label": "Type I Error Rate",
+        "meaning": "False positives: two different people matched",
+        "formula": "false positives / total matches generated",
     },
-    "fnr": {
-        "label": "False Negative Rate",
-        "meaning": "Share of existing people the algorithm missed",
-        "formula": "FN / (FN + TP)",
+    "type2_error": {
+        "label": "Type II Error Rate",
+        "meaning": "False negatives: an existing person not matched",
+        "formula": "false negatives / total actual matches",
     },
     "review_rate": {
         "label": "Manual Review Rate",
         "meaning": "Workload sent to human reviewers",
         "formula": "MANUAL REVIEW decisions / total records",
     },
-    "merge_error_rate": {
-        "label": "Merge Error Rate",
-        "meaning": "Share of automatic matches that would merge two different people",
-        "formula": "FP / MATCH decisions",
+    "incorrect_merge_rate": {
+        "label": "Incorrect Merge Rate",
+        "meaning": "Automatic matches that merged two different people",
+        "formula": "incorrect merges / total matches generated",
     },
     "dispute_rate": {
         "label": "Dispute Rate",
-        "meaning": "Share of records where a customer complains about the result",
-        "formula": "disputes / total records",
+        "meaning": "Matches disputed by the customer ('does not belong to me')",
+        "formula": "disputed matches / total matches generated",
     },
 }
 
@@ -211,23 +268,7 @@ def simulate_disputes(results, period=""):
 
 
 def compute_kpis(results, period=""):
-    m = metrics_for_results(results)
-    total = len(results)
-    match_decisions = int((results["decision"] == C.MATCH).sum())
-    disputes = int(simulate_disputes(results, period).sum())
-    return {
-        "records": total,
-        "hit_rate": safe_div(match_decisions, total),
-        "precision": m["precision"],
-        "recall": m["recall"],
-        "fpr": m["fpr"],
-        "fnr": m["fnr"],
-        "review_rate": m["review_rate"],
-        "merge_error_rate": safe_div(m["FP"], match_decisions),
-        "dispute_rate": safe_div(disputes, total),
-        "disputes": disputes,
-        "TP": m["TP"], "FP": m["FP"], "TN": m["TN"], "FN": m["FN"], "review": m["review"],
-    }
+    return document_metrics(results, simulate_disputes(results, period))
 
 
 def rag_status(kpi, value):

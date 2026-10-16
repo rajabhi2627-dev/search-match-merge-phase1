@@ -252,32 +252,42 @@ def page_performance():
 
     st.info(
         "**How MANUAL REVIEW is treated:** a MANUAL REVIEW is not an automatic decision, so it is counted "
-        "neither as correct nor as incorrect. Accuracy, Precision, Recall, F1, FPR and FNR are calculated on the "
+        "neither as correct nor as incorrect. Accuracy, Precision, Recall and F1 are calculated on the "
         f"{m['auto_decided']} automatically decided records (MATCH or NO MATCH). The review rate is shown separately. "
         "A MATCH to the wrong entity counts as a False Positive (it would cause a wrong merge)."
     )
 
-    st.subheader("Metrics (automatic decisions)")
+    k = P.compute_kpis(results, "test")
+    st.subheader("Metrics")
     c = st.columns(6)
-    for col, (label, key) in zip(c, [("Accuracy", "accuracy"), ("Precision", "precision"), ("Recall", "recall"),
-                                     ("F1 Score", "f1"), ("False Positive Rate", "fpr"),
-                                     ("False Negative Rate", "fnr")]):
-        col.metric(label, f"{m[key]:.1%}")
-    st.caption(f"TP = {m['TP']}, FP = {m['FP']}, TN = {m['TN']}, FN = {m['FN']}")
+    for col, (label, value) in zip(c, [("Accuracy", m["accuracy"]), ("Precision", m["precision"]),
+                                       ("Recall", m["recall"]), ("F1 Score", m["f1"]),
+                                       ("Type I Error Rate", k["type1_error"]),
+                                       ("Type II Error Rate", k["type2_error"])]):
+        col.metric(label, f"{value:.1%}")
+    st.caption(f"TP = {m['TP']}, FP = {m['FP']}, TN = {m['TN']}, FN = {m['FN']}. "
+               f"Type I = false positives / total matches generated ({k['FP']} / {k['matches_generated']}); "
+               f"Type II = false negatives / total actual matches ({k['FN']} / {k['actual_matches']}), "
+               "as defined in the validation report.")
 
     st.subheader("Monitoring KPIs for this run")
-    k = P.compute_kpis(results, "test")
     c = st.columns(4)
-    for col, key in zip(c, ["hit_rate", "review_rate", "merge_error_rate", "dispute_rate"]):
+    for col, key in zip(c, ["hit_rate", "review_rate", "incorrect_merge_rate", "dispute_rate"]):
         col.metric(P.KPI_DICTIONARY[key]["label"], f"{k[key]:.1%}", P.rag_status(key, k[key]),
                    delta_color="off")
-    st.caption(f"{k['disputes']} simulated customer dispute(s). See the Monitoring page for definitions and trends.")
+    st.caption(f"Hit rate = confirmed matches / total matches generated ({k['confirmed']} / "
+               f"{k['matches_generated']}). {k['disputed_matches']} disputed match(es) and "
+               f"{k['duplicate_disputes']} 'I already have an account' complaint(s) (simulated). "
+               "See the Monitoring page for definitions and trends.")
 
     with st.expander("Sensitivity check: what if MANUAL REVIEW were treated as NO MATCH?"):
         alt = P.metrics_for_results(results, review_as=C.NO_MATCH)
+        m = {**m, **{key: k[key] for key in ("type1_error", "type2_error")}}
+        alt_doc = P.document_metrics(P.reviews_as_no_match(results))
+        alt = {**alt, **{key: alt_doc[key] for key in ("type1_error", "type2_error")}}
         keys = [("Records evaluated", "auto_decided"), ("TP", "TP"), ("FP", "FP"), ("TN", "TN"), ("FN", "FN"),
                 ("Accuracy", "accuracy"), ("Precision", "precision"), ("Recall", "recall"), ("F1 Score", "f1"),
-                ("False Positive Rate", "fpr"), ("False Negative Rate", "fnr")]
+                ("Type I Error Rate", "type1_error"), ("Type II Error Rate", "type2_error")]
         fmt = lambda d, k: f"{d[k]:.1%}" if isinstance(d[k], float) else str(d[k])
         st.dataframe(pd.DataFrame({
             "Metric": [k[0] for k in keys],
@@ -435,8 +445,11 @@ Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below tha
   **TN**: NO MATCH for a new person. **FN**: NO MATCH although the person exists.
 - **MANUAL REVIEW** is not an automatic decision: it is excluded from the binary metrics and reported as the review rate.
 - Accuracy = (TP + TN) / (TP + FP + TN + FN), Precision = TP / (TP + FP), Recall = TP / (TP + FN),
-  F1 = 2 × P × R / (P + R), FPR = FP / (FP + TN), FNR = FN / (FN + TP). Division by zero returns 0.
-- Monitoring KPIs (HIT rate, dispute rate, merge error rate, review rate) are defined on the Monitoring page.
+  F1 = 2 × P × R / (P + R). Division by zero returns 0.
+- Validation-report definitions (used on every page): **matches generated** = MATCH + MANUAL REVIEW decisions;
+  Hit rate = confirmed matches / total matches generated; Dispute rate = disputed matches / total matches generated;
+  Incorrect merge rate = incorrect merges / total matches generated; Type I error rate = false positives / total
+  matches generated; Type II error rate = false negatives / total actual matches.
 """)
 
     st.subheader("14. Assumptions and limitations")
@@ -488,9 +501,10 @@ def page_monitoring(master):
     with st.expander("KPI dictionary", expanded=True):
         st.dataframe(kpi_dictionary_table(), hide_index=True, width="stretch")
         fp, fn = C.DISPUTE_RAISE_RATE["FP"], C.DISPUTE_RAISE_RATE["FN"]
-        st.caption(f"Disputes are simulated (fixed seed): {fp:.0%} of wrong merges ('this is not my account') and "
-                   f"{fn:.0%} of missed duplicates ('I already have an account') lead to a customer complaint. "
-                   "Thresholds are in config.py.")
+        st.caption(f"Matches generated = MATCH + MANUAL REVIEW decisions. Disputes are simulated (fixed seed): "
+                   f"{fp:.0%} of wrong merges lead to a 'does not belong to me' dispute (counted in the dispute "
+                   f"rate) and {fn:.0%} of missed duplicates lead to an 'I already have an account' complaint "
+                   "(shown separately). Formulas follow the validation report; thresholds are in config.py.")
 
     st.markdown(f"""
 **Monitoring set-up:** {len(C.MONITORING_PERIODS)} months ({C.MONITORING_PERIODS[0]} to {C.MONITORING_PERIODS[-1]}),
@@ -531,7 +545,12 @@ FEBRL corrupted: the first month receives the cleanest records, the last month t
     styled = table.style.format("{:.1%}").apply(
         lambda col: [f"background-color: {RAG_COLOURS[s]}" for s in status[col.name]], axis=0)
     st.dataframe(styled, width="stretch")
-    counts = kpis.set_index("period")[["records", "TP", "FP", "TN", "FN", "review", "disputes"]].T
+    counts = kpis.set_index("period")[["records", "matches_generated", "confirmed", "actual_matches", "TP", "FP",
+                                       "TN", "FN", "review", "disputed_matches", "duplicate_disputes"]]
+    counts = counts.rename(columns={"records": "Records", "matches_generated": "Matches generated",
+                                    "confirmed": "Confirmed matches", "actual_matches": "Actual matches",
+                                    "review": "Manual review", "disputed_matches": "Disputed matches",
+                                    "duplicate_disputes": "'I already have an account'"}).T
     st.dataframe(counts, width="stretch")
 
     st.subheader("Trend")
@@ -602,8 +621,8 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
 """)
     with st.expander("Metric definitions used on this page"):
         st.dataframe(V.METRIC_DEFINITIONS, hide_index=True, width="stretch")
-        st.caption("Hit rate here follows the validation-report definition (quality of the matches put forward). "
-                   "The Monitoring page's HIT Rate is a volume measure (MATCH decisions / all records).")
+        st.caption("These are the formulas of the validation report; the Performance and Monitoring pages use "
+                   "the same definitions.")
 
     if st.button("Run Validation", type="primary"):
         with st.spinner("Running the validation sample and 5 challenger algorithms (about 20 seconds)..."):

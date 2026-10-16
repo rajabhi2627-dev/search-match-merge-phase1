@@ -156,12 +156,12 @@ VALIDATION_LIMITS = {
 #   higher: Green >= green, Amber >= amber, otherwise Red
 #   lower : Green <= green, Amber <= amber, otherwise Red
 KPI_THRESHOLDS = {
-    "hit_rate":         {"direction": "higher", "green": 0.60, "amber": 0.50},
-    "precision":        {"direction": "higher", "green": 0.98, "amber": 0.95},
-    "recall":           {"direction": "higher", "green": 0.95, "amber": 0.90},
-    "fpr":              {"direction": "lower",  "green": 0.02, "amber": 0.05},
-    "fnr":              {"direction": "lower",  "green": 0.05, "amber": 0.10},
-    "review_rate":      {"direction": "lower",  "green": 0.15, "amber": 0.25},
-    "merge_error_rate": {"direction": "lower",  "green": 0.01, "amber": 0.03},
-    "dispute_rate":     {"direction": "lower",  "green": 0.01, "amber": 0.03},
+    "hit_rate":             {"direction": "higher", "green": 0.95, "amber": 0.90},
+    "precision":            {"direction": "higher", "green": 0.98, "amber": 0.95},
+    "recall":               {"direction": "higher", "green": 0.95, "amber": 0.90},
+    "type1_error":          {"direction": "lower",  "green": 0.02, "amber": 0.05},
+    "type2_error":          {"direction": "lower",  "green": 0.05, "amber": 0.10},
+    "review_rate":          {"direction": "lower",  "green": 0.15, "amber": 0.25},
+    "incorrect_merge_rate": {"direction": "lower",  "green": 0.005, "amber": 0.01},
+    "dispute_rate":         {"direction": "lower",  "green": 0.02, "amber": 0.03},
 }

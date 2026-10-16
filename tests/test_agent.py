@@ -105,8 +105,9 @@ def test_direction_matches_sign(setup):
 
 
 def test_percent_only_on_percentages(setup):
-    assert _consistency(setup, "S01", "Name replaced or very different explains 46.5% of exceptions.")[2] == []
-    assert _consistency(setup, "S01", "Name replaced or very different explains 40% of exceptions.")[2]
+    top = T.get_root_causes(_scenario(setup, "S01")["ctx"])["root_causes"][0]
+    assert _consistency(setup, "S01", f"{top['root_cause']} explains {top['share_pct']}% of exceptions.")[2] == []
+    assert _consistency(setup, "S01", f"{top['root_cause']} explains {top['cases']}% of exceptions.")[2]
 
 
 def test_policy_retrieval():

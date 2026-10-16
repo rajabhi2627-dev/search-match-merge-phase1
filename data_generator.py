@@ -115,9 +115,30 @@ def generate_test_records(master_records=None):
     return _finalise(records, random.Random(C.SAMPLE_SEED + 2))
 
 
+def _lookalike(number):
+    """A relative of master customer `number`: same name and address, DOB missing, ID 1 digit different."""
+    originals, _ = load_febrl()
+    rec = to_record(originals.loc[number])
+    sid = rec["soc_sec_id"]
+    rec["soc_sec_id"] = sid[:-1] + str((int(sid[-1]) + 1) % 10)
+    rec["date_of_birth"] = ""
+    return {"source_id": f"lookalike-of-{number}", **rec, "true_entity_id": None, "true_match_status": C.NO_MATCH,
+            "scenario": "Look-alike relative (same name and address, ID 1 digit different)"}
+
+
+def _shared_id(new_number, master_number):
+    """A new person entered with the Soc. Sec. ID of master customer `master_number`."""
+    originals, _ = load_febrl()
+    rec = to_record(originals.loc[new_number])
+    rec["soc_sec_id"] = to_record(originals.loc[master_number])["soc_sec_id"]
+    return {"source_id": f"sharedid-{new_number}-{master_number}", **rec, "true_entity_id": None,
+            "true_match_status": C.NO_MATCH, "scenario": "Shared ID (new person with an existing customer's ID)"}
+
+
 def generate_monitoring_batches():
     """{period: records}. Existing-people duplicates are sorted by number of corrupted fields;
-    month 1 gets the cleanest window, the last month the most corrupted one (data-quality drift)."""
+    month 1 gets the cleanest window, the last month the most corrupted one (data-quality drift).
+    Hard cases (look-alike relatives, shared IDs) replace some new-person records from February on."""
     originals, duplicates = load_febrl()
     in_master, outside = _split()
     test_match, test_no_match = _test_numbers()
@@ -131,11 +152,18 @@ def generate_monitoring_batches():
     months = len(C.MONITORING_PERIODS)
     size = C.MONITORING_MATCH_COUNT
     step = (len(pool) - size) / max(months - 1, 1)
+    hard_rng = random.Random(C.SAMPLE_SEED + 4)
+    customers = [n for n in in_master if n not in set(test_match)]
     batches = {}
     for i, period in enumerate(C.MONITORING_PERIODS):
         start = round(i * step)
         matches = pool[start:start + size]
         news = new_people[i * C.MONITORING_NO_MATCH_COUNT:(i + 1) * C.MONITORING_NO_MATCH_COUNT]
-        records = [_incoming(n, True) for n in matches] + [_incoming(n, False) for n in news]
+        lookalikes, shared = C.MONITORING_HARD_CASES.get(period, (0, 0))
+        hard_news, news = news[:lookalikes + shared], news[lookalikes + shared:]
+        targets = hard_rng.sample(customers, lookalikes + shared)
+        hard = ([_lookalike(t) for t in targets[:lookalikes]]
+                + [_shared_id(n, t) for n, t in zip(hard_news[lookalikes:], targets[lookalikes:])])
+        records = [_incoming(n, True) for n in matches] + [_incoming(n, False) for n in news] + hard
         batches[period] = _finalise(records, random.Random(f"{C.SAMPLE_SEED}-{period}"))
     return batches

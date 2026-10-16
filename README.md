@@ -183,6 +183,10 @@ whose person exists in the master.
   the test set.
 - **Data-quality drift:** duplicates are ordered by the number of fields FEBRL corrupted; the first month
   receives the cleanest records, the last month the most corrupted.
+- **Hard cases (not in FEBRL):** from February a few new-person records are replaced by *look-alike relatives*
+  (same name and address as an existing customer, DOB missing, Soc. Sec. ID 1 digit different) and *shared IDs*
+  (a new person entered with an existing customer's ID). Look-alikes are wrongly merged, which produces
+  realistic incorrect merges and disputes; shared IDs are stopped by the conflict rules.
 - **Disputes (simulated, fixed seed):** 80% of wrong merges lead to a "does not belong to me" dispute (counted
   in the dispute rate); 50% of missed duplicates lead to an "I already have an account" complaint (shown separately).
 - **Observations:** rule-based – every KPI that is not Green in the latest month, or moved by ≥ 2 percentage

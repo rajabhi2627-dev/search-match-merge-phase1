@@ -95,7 +95,7 @@ NO_MATCH = "NO MATCH"
 #   dataset4b.csv = 5,000 corrupted duplicates; rec-N-dup-0 is the same person as rec-N-org
 # ------------------------------------------------------------------
 DATASET_NAME = "FEBRL-4"
-SCHEMA_VERSION = "3"           # change to force the database to be rebuilt
+SCHEMA_VERSION = "4"           # change to force the database to be rebuilt
 FEBRL_DIR = DATA_DIR / "febrl"
 FEBRL_ORIGINALS = FEBRL_DIR / "dataset4a.csv"
 FEBRL_DUPLICATES = FEBRL_DIR / "dataset4b.csv"
@@ -118,6 +118,12 @@ TEST_NO_MATCH_COUNT = TEST_RECORD_COUNT - TEST_MATCH_COUNT
 MONITORING_PERIODS = ["Jan-26", "Feb-26", "Mar-26", "Apr-26", "May-26", "Jun-26"]
 MONITORING_MATCH_COUNT = 75
 MONITORING_NO_MATCH_COUNT = 25
+# Hard cases that FEBRL lacks; they replace new-person records, so each month keeps 100 records.
+#   look-alike relative: same name and address as a master customer, DOB missing, Soc. Sec. ID 1 digit different
+#   shared ID: a new person entered with an existing customer's Soc. Sec. ID
+MONITORING_HARD_CASES = {  # period: (look-alike relatives, shared IDs)
+    "Jan-26": (0, 0), "Feb-26": (0, 1), "Mar-26": (1, 1), "Apr-26": (1, 1), "May-26": (1, 2), "Jun-26": (2, 2),
+}
 
 # Share of wrong decisions that customers actually complain about (simulated, fixed seed).
 #   FP = wrong merge      -> "this is not my account"

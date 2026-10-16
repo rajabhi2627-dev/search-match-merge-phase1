@@ -181,11 +181,14 @@ COMPARATORS = {
 }
 
 
-def compare_field(field, a, b):
-    """Compare one field. Missing on either side -> score None (field is excluded from the weighted score)."""
+def compare_field(field, a, b, comparators=None):
+    """Compare one field. Missing on either side -> score None (field is excluded from the weighted score).
+
+    comparators: optional {field: function} replacing the production comparator (challenger benchmarking).
+    """
     if not a or not b:
         return _result(field, None, None, None, None, "missing - excluded from score")
-    return COMPARATORS[field](a, b)
+    return {**COMPARATORS, **(comparators or {})}[field](a, b)
 
 
 # ==================================================================
@@ -272,8 +275,8 @@ def candidate_conflicts(field_scores):
     return conflicts
 
 
-def score_candidate(norm_input, item, reasons):
-    details = {f: compare_field(f, norm_input[f], item["norm"][f]) for f in C.FIELDS}
+def score_candidate(norm_input, item, reasons, comparators=None):
+    details = {f: compare_field(f, norm_input[f], item["norm"][f], comparators) for f in C.FIELDS}
     field_scores = {f: details[f]["score"] for f in C.FIELDS}
     overall, evidence_weight, contributions = weighted_score(field_scores)
     return {
@@ -304,19 +307,22 @@ def cross_candidate_conflicts(scored):
 # 6. DECISION
 # ==================================================================
 
-def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limited_evidence):
+def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limited_evidence,
+                  match_threshold=C.MATCH_THRESHOLD, review_threshold=C.REVIEW_THRESHOLD):
     """Return (decision, [reasons]).
 
-    NO MATCH       : best score < REVIEW_THRESHOLD
-    MANUAL REVIEW  : score in [REVIEW, MATCH) OR gap < SCORE_GAP_THRESHOLD (with a meaningful
+    NO MATCH       : best score < review_threshold
+    MANUAL REVIEW  : score in [review, match) OR gap < SCORE_GAP_THRESHOLD (with a meaningful
                      second candidate) OR a conflict OR too little evidence
-    MATCH          : score >= MATCH_THRESHOLD and none of the review reasons apply
+    MATCH          : score >= match_threshold and none of the review reasons apply
+
+    The thresholds can be overridden for threshold calibration on the Validation page.
     """
-    if best_score < C.REVIEW_THRESHOLD:
-        return C.NO_MATCH, [f"Best score {best_score:.1f} is below the review threshold ({C.REVIEW_THRESHOLD})"]
+    if best_score < review_threshold:
+        return C.NO_MATCH, [f"Best score {best_score:.1f} is below the review threshold ({review_threshold})"]
     reasons = []
-    if best_score < C.MATCH_THRESHOLD:
-        reasons.append(f"Score {best_score:.1f} is between {C.REVIEW_THRESHOLD} and {C.MATCH_THRESHOLD}")
+    if best_score < match_threshold:
+        reasons.append(f"Score {best_score:.1f} is between {review_threshold} and {match_threshold}")
     if has_meaningful_second and score_gap < C.SCORE_GAP_THRESHOLD:
         reasons.append(f"Score gap {score_gap:.1f} is below {C.SCORE_GAP_THRESHOLD} - two candidates are too close")
     if conflicts:
@@ -326,7 +332,7 @@ def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limit
     if reasons:
         return C.MANUAL_REVIEW, reasons
     return C.MATCH, [
-        f"Score {best_score:.1f} >= {C.MATCH_THRESHOLD}, no conflicts and score gap {score_gap:.1f} >= {C.SCORE_GAP_THRESHOLD}"
+        f"Score {best_score:.1f} >= {match_threshold}, no conflicts and score gap {score_gap:.1f} >= {C.SCORE_GAP_THRESHOLD}"
     ]
 
 
@@ -334,12 +340,15 @@ def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limit
 # 7. FULL PIPELINE
 # ==================================================================
 
-def match_record(raw_input, master):
-    """Run the complete Search & Match pipeline for one incoming record."""
+def match_record(raw_input, master, comparators=None):
+    """Run the complete Search & Match pipeline for one incoming record.
+
+    comparators: optional field comparator overrides; only used for challenger benchmarking.
+    """
     norm_input = normalize_record(raw_input)
 
     candidates = find_candidates(norm_input, master)
-    scored = [score_candidate(norm_input, item, reasons) for item, reasons in candidates]
+    scored = [score_candidate(norm_input, item, reasons, comparators) for item, reasons in candidates]
     scored.sort(key=lambda c: (-c["overall"], c["entity_id"]))
 
     result = {
@@ -352,6 +361,7 @@ def match_record(raw_input, master):
         "second_score": None,
         "score_gap": None,
         "conflicts": [],
+        "limited_evidence": False,
         "decision": C.NO_MATCH,
         "decision_reasons": ["No candidate satisfied any search rule"],
         "predicted_entity_id": None,
@@ -372,6 +382,7 @@ def match_record(raw_input, master):
         second_score=second_score,
         score_gap=score_gap,
         conflicts=conflicts,
+        limited_evidence=limited_evidence,
         decision=decision,
         decision_reasons=reasons,
         predicted_entity_id=best["entity_id"] if decision == C.MATCH else None,

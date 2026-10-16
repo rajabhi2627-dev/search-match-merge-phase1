@@ -9,6 +9,7 @@ import config as C
 import data_generator as G
 import matching as M
 import performance as P
+import validation as V
 
 
 @pytest.fixture(scope="module")
@@ -165,6 +166,26 @@ def test_performance_metrics():
     assert m["fnr"] == pytest.approx(4 / 12)
     assert m["review_rate"] == pytest.approx(5 / 25)
     assert P.compute_metrics([])["precision"] == 0.0  # division by zero handled
+
+
+def test_soundex_and_jaccard():
+    assert V.soundex("robert") == V.soundex("rupert") == "R163"
+    assert V.soundex_similarity("michael friebel", "friebel michael") == 100
+    assert V.jaccard_similarity("1 banjine street 2600", "4 banjine street 2600") == 60
+
+
+def test_challenger_replaces_one_comparator():
+    jw = V.CHALLENGERS["Jaro-Winkler (name)"]
+    assert M.compare_field("name", "rachael dent", "rachael dent", jw)["method"] == "Jaro-Winkler (name)"
+    assert M.compare_field("address", "a b", "a b", jw)["method"] == C.FIELD_CONFIG["address"]["method"]
+
+
+def test_threshold_redecide_reproduces_decisions(master):
+    import pandas as pd
+    results = P.run_test_matching(pd.DataFrame(G.generate_test_records()), master)
+    results["conflicts"] = results["conflicts"].fillna("")
+    redone = V.redecide(results, C.MATCH_THRESHOLD, C.REVIEW_THRESHOLD)
+    assert (redone["decision"] == results["decision"]).all()
 
 
 def test_wrong_entity_match_is_false_positive():

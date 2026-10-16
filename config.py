@@ -94,7 +94,7 @@ NO_MATCH = "NO MATCH"
 #   dataset4b.csv = 5,000 corrupted duplicates; rec-N-dup-0 is the same person as rec-N-org
 # ------------------------------------------------------------------
 DATASET_NAME = "FEBRL-4"
-SCHEMA_VERSION = "2"           # change to force the database to be rebuilt
+SCHEMA_VERSION = "3"           # change to force the database to be rebuilt
 FEBRL_DIR = DATA_DIR / "febrl"
 FEBRL_ORIGINALS = FEBRL_DIR / "dataset4a.csv"
 FEBRL_DUPLICATES = FEBRL_DIR / "dataset4b.csv"
@@ -122,6 +122,35 @@ MONITORING_NO_MATCH_COUNT = 25
 #   FP = wrong merge      -> "this is not my account"
 #   FN = missed duplicate -> "I already have an account"
 DISPUTE_RAISE_RATE = {"FP": 0.8, "FN": 0.5}
+
+# ------------------------------------------------------------------
+# Independent validation (Validation page)
+# ------------------------------------------------------------------
+# Challenger algorithms: each replaces ONE production comparator; search, weights and decision rules stay
+# the same, so any difference in results comes from that algorithm alone.
+# A challenger field agrees if its similarity (0-100) >= cut-off; otherwise the field score is 0.
+CHALLENGER_CUTOFFS = {
+    "Jaro-Winkler (name)": 85,
+    "Levenshtein (name)": 70,
+    "Damerau-Levenshtein (name)": 70,
+    "Soundex (name)": 100,       # every word of the name must sound the same
+    "Jaccard (address)": 50,
+}
+
+# Threshold calibration: decisions are recomputed for these values (all other rules unchanged).
+CALIBRATION_MATCH_THRESHOLDS = [75, 80, 85, 90, 95]
+CALIBRATION_REVIEW_THRESHOLDS = [55, 60, 65, 70, 75]
+
+# Data quality checks on incoming records
+ID_EXPECTED_LENGTH = 7           # FEBRL social security IDs have 7 digits
+
+# Benchmark levels used in the validation observations
+VALIDATION_LIMITS = {
+    "type1_error": 0.05,         # Type I (false positive) error rate should stay below 5%
+    "dispute_rate": 0.03,        # dispute rate on generated matches below 3%
+    "incorrect_merge_rate": 0.01,  # incorrect merges below 1% of generated matches
+    "max_attribute_share": 0.50,  # no single attribute should drive more than 50% of the match score
+}
 
 # KPI thresholds. direction "higher" = higher is better.
 #   higher: Green >= green, Amber >= amber, otherwise Red

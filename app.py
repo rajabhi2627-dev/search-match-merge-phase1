@@ -12,6 +12,7 @@ import data_generator as G
 import database as db
 import matching as M
 import performance as P
+import validation as V
 
 st.set_page_config(page_title="Search, Match & Merge - Phase 1", layout="wide")
 
@@ -437,6 +438,26 @@ Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below tha
   F1 = 2 × P × R / (P + R), FPR = FP / (FP + TN), FNR = FN / (FN + TP). Division by zero returns 0.
 - Monitoring KPIs (HIT rate, dispute rate, merge error rate, review rate) are defined on the Monitoring page.
 """)
+
+    st.subheader("14. Assumptions and limitations")
+    st.markdown("""
+**Assumptions**
+- The FEBRL ground truth is correct: `rec-N-dup-0` is the same person as `rec-N-org`, and FEBRL people are all different.
+- A manual reviewer always takes the right decision, so manual review cases cause no disputes.
+- Disputes are simulated with fixed rates (see config.py); real complaint behaviour may differ.
+- Thresholds and weights are set by expert judgement and checked with threshold calibration on the Validation page;
+  they were not tuned on the test set.
+
+**Limitations**
+- FEBRL has only 5 person fields (no phone, email or gender), and the Soc. Sec. ID is rarely wrong or shared,
+  which is easier than real bureau data.
+- Records with a completely replaced name or a wrong ID usually fall below the review threshold and are missed (Type II errors).
+- People with genuinely similar names and the same date of birth are not present in FEBRL, so look-alike risk is under-tested.
+- The prototype runs in memory on 1,000 master records; large volumes would need indexed blocking.
+
+**Mitigating controls**: conflict rules and the score gap send uncertain cases to manual review; the Monitoring and
+Validation pages track error rates, disputes and root causes over time.
+""")
     st.caption("All parameters are in config.py. Data is stored in data/matching.db.")
 
 
@@ -541,6 +562,148 @@ FEBRL corrupted: the first month receives the cleanest records, the last month t
 
 
 # ==================================================================
+# PAGE 6 - INDEPENDENT VALIDATION
+# ==================================================================
+
+PERCENT_COLUMNS = ["hit_rate", "dispute_rate", "incorrect_merge_rate", "type1_error", "type2_error",
+                   "precision", "recall", "review_rate", "Share of matches", "Contribution", "Configured weight",
+                   "Incoming completeness", "Incoming validity", "Master completeness", "Master validity"]
+REPORT_LABELS = {
+    "period": "Period", "records": "Records processed", "matches_generated": "Matches generated",
+    "confirmed": "Confirmed matches", "auto_merged": "Auto-merged", "manual_review": "Manual review",
+    "disputed_matches": "Disputed matches", "duplicate_disputes": "Missed-duplicate disputes",
+    "incorrect_merges": "Incorrect merges", "hit_rate": "Hit rate", "dispute_rate": "Dispute rate",
+    "incorrect_merge_rate": "Incorrect merge rate", "type1_error": "Type I error (FP)",
+    "type2_error": "Type II error (FN)", "precision": "Precision", "recall": "Recall",
+    "review_rate": "Manual review rate",
+}
+
+
+def pct_table(df, columns=None):
+    """Show a table with rate columns formatted as percentages."""
+    df = df[columns] if columns else df
+    fmt = {c: "{:.1%}" for c in df.columns if c in PERCENT_COLUMNS}
+    renamed = df.rename(columns=REPORT_LABELS)
+    fmt = {REPORT_LABELS.get(c, c): f for c, f in fmt.items()}
+    st.dataframe(renamed.style.format(fmt), hide_index=True, width="stretch")
+
+
+def page_validation(master_df, master):
+    st.header("Independent Validation")
+    st.write("A model validation of the Search & Match algorithm, structured like an independent validation "
+             "report: data quality, hit and dispute rates, search path analysis, challenger benchmarking, "
+             "Type I / Type II errors, dispute and incorrect merge analysis, root cause analysis and "
+             "threshold calibration.")
+    st.markdown(f"""
+**Validation sample:** the {len(C.MONITORING_PERIODS)} monthly batches from the Monitoring page
+({len(C.MONITORING_PERIODS) * (C.MONITORING_MATCH_COUNT + C.MONITORING_NO_MATCH_COUNT)} FEBRL records,
+none used in the test set). Each month is treated as one reporting period. The ground truth comes from FEBRL,
+disputes are simulated with a fixed seed, and everything is rule-based (no machine learning).
+""")
+    with st.expander("Metric definitions used on this page"):
+        st.dataframe(V.METRIC_DEFINITIONS, hide_index=True, width="stretch")
+        st.caption("Hit rate here follows the validation-report definition (quality of the matches put forward). "
+                   "The Monitoring page's HIT Rate is a volume measure (MATCH decisions / all records).")
+
+    if st.button("Run Validation", type="primary"):
+        with st.spinner("Running the validation sample and 5 challenger algorithms (about 20 seconds)..."):
+            monitoring = P.run_monitoring(master)
+            db.save_monitoring_results(monitoring)
+            db.save_benchmark_results(V.run_benchmark(master, db.load_monitoring_results()))
+        st.success("Validation complete. Results saved to the database.")
+
+    results = db.load_monitoring_results()
+    benchmark = db.load_benchmark_results()
+    if results.empty or benchmark.empty:
+        st.info("Click 'Run Validation' to start.")
+        return
+
+    periods = V.by_period(results)
+    quality = V.data_quality(results, master_df)
+    paths = V.search_path_analysis(results)
+    contribution = V.attribute_contribution(results)
+    exceptions = V.root_cause_analysis(results, master)
+    rca = V.root_cause_summary(exceptions)
+
+    st.subheader("1. Validation data summary")
+    st.dataframe(V.data_summary(results, len(master_df)), hide_index=True, width="stretch")
+
+    st.subheader("2. Data quality checks")
+    st.write("Completeness = share of records where the attribute is filled. Validity = share of filled values "
+             "that pass the rule.")
+    pct_table(quality)
+
+    st.subheader("3. Hit rate and dispute rate by period")
+    pct_table(periods, ["period", "records", "matches_generated", "confirmed", "disputed_matches",
+                        "hit_rate", "dispute_rate"])
+    trend = periods.melt(id_vars="period", value_vars=["hit_rate", "dispute_rate", "type2_error"],
+                         var_name="Metric", value_name="Rate")
+    trend["Metric"] = trend["Metric"].map(REPORT_LABELS)
+    fig = px.line(trend, x="period", y="Rate", color="Metric", markers=True, labels={"period": "Period"})
+    fig.update_layout(height=320, yaxis_tickformat=".0%", margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(fig, width="stretch")
+
+    st.subheader("4. Search path analysis")
+    st.write("Which search rule found the correct person (correct automatic matches only). 'Found ONLY by "
+             "this rule' shows how many matches would be lost if that rule were removed.")
+    pct_table(paths)
+    st.write("Share of the weighted match score contributed by each attribute:")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        pct_table(contribution)
+    with col2:
+        fig = px.bar(contribution, x="Contribution", y="Matching attribute", orientation="h", text_auto=".1%")
+        fig.update_layout(height=250, xaxis_tickformat=".0%", margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, width="stretch")
+
+    st.subheader("5. Challenger algorithm benchmarking")
+    cutoffs = ", ".join(f"{k} ≥ {v}" for k, v in C.CHALLENGER_CUTOFFS.items())
+    st.write("Each challenger replaces **one** production comparator; candidate search, weights and decision "
+             "rules stay the same, so any difference comes from that algorithm alone. "
+             f"Challenger cut-offs: {cutoffs}.")
+    pct_table(benchmark, ["Algorithm", "matches_generated", "confirmed", "hit_rate", "precision", "recall",
+                          "type1_error", "type2_error", "incorrect_merges", "dispute_rate", "review_rate"])
+
+    st.subheader("6. Type I and Type II error assessment")
+    st.write("Type I error (false positive): two different people matched. "
+             "Type II error (false negative): the same person not matched.")
+    pct_table(periods, ["period", "records", "TP", "FP", "TN", "FN", "type1_error", "type2_error"])
+
+    st.subheader("7. Dispute and incorrect merge analysis")
+    pct_table(periods, ["period", "matches_generated", "disputed_matches", "dispute_rate", "incorrect_merges",
+                        "incorrect_merge_rate", "duplicate_disputes"])
+    st.caption("Disputed matches = 'does not belong to me' complaints about automatic matches. Missed-duplicate "
+               "disputes ('I already have an account') come from Type II errors and are shown separately.")
+
+    st.subheader("8. Root cause analysis of exceptions")
+    st.write(f"Exceptions = missed duplicates, wrong merges and manual reviews ({len(exceptions)} records). "
+             "Each incoming record is compared with the true master record to find the primary cause.")
+    pct_table(rca)
+    st.write("Grouping by error pattern (records with exactly the same attributes differing):")
+    st.dataframe(V.error_patterns(exceptions), hide_index=True, width="stretch")
+    with st.expander("All exception records"):
+        st.dataframe(exceptions[["period", "test_record_id", "source_id", "input_name", "true_entity_id",
+                                 "best_candidate_id", "match_score", "decision", "outcome", "disputed",
+                                 "root_cause", "attributes_affected"]], hide_index=True, width="stretch")
+
+    st.subheader("9. Threshold calibration")
+    st.write("Decisions are recomputed for other thresholds while everything else stays the same. Recall is "
+             "measured on automatic decisions, so a lower REVIEW threshold turns missed matches into manual "
+             "reviews - higher recall but more human workload.")
+    calibration = V.threshold_calibration(results)
+    for varied in ["MATCH threshold", "REVIEW threshold"]:
+        st.markdown(f"**Varying the {varied}**")
+        pct_table(calibration[calibration["Varied"] == varied],
+                  ["MATCH threshold", "REVIEW threshold", "Current setting", "precision", "recall",
+                   "review_rate", "type1_error", "type2_error", "incorrect_merges"])
+
+    st.subheader("10. Validation summary")
+    for note in V.observations(periods, contribution, benchmark, rca, quality):
+        show = st.success if note["Status"] == "Satisfactory" else st.warning
+        show(f"**{note['Area']} - {note['Status']}:** {note['Observation']}")
+
+
+# ==================================================================
 # NAVIGATION
 # ==================================================================
 
@@ -548,7 +711,8 @@ def main():
     master_df, master = get_master()
     st.sidebar.title("Search, Match & Merge")
     st.sidebar.caption("Phase 1 prototype - deterministic matching")
-    page = st.sidebar.radio("Go to", ["Search & Match", "Test Data", "Performance", "Monitoring", "Methodology"])
+    page = st.sidebar.radio("Go to", ["Search & Match", "Test Data", "Performance", "Monitoring", "Validation",
+                                      "Methodology"])
     st.sidebar.divider()
     st.sidebar.caption(f"Dataset: {C.DATASET_NAME} benchmark")
     st.sidebar.caption(f"Master records: {len(master_df):,}")
@@ -561,6 +725,8 @@ def main():
         page_performance()
     elif page == "Monitoring":
         page_monitoring(master)
+    elif page == "Validation":
+        page_validation(master_df, master)
     else:
         page_methodology()
 

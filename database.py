@@ -6,6 +6,7 @@ Tables
   test_records   : the 100 incoming test records + ground truth
   match_results  : output of running the matcher on the test records
   monitoring_results : 6 monthly batches used for Week 4 performance monitoring
+  benchmark_results  : challenger algorithm benchmarking summary (Validation page)
   meta           : which dataset the database was built from
 """
 import sqlite3
@@ -38,7 +39,8 @@ def init_db():
     version = f"{C.DATASET_NAME} v{C.SCHEMA_VERSION}"
     with get_connection() as conn:
         if _stored_dataset(conn) != version:
-            for table in ["master_records", "test_records", "match_results", "monitoring_results", "meta"]:
+            for table in ["master_records", "test_records", "match_results", "monitoring_results",
+                          "benchmark_results", "meta"]:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT INTO meta VALUES ('dataset', ?)", (version,))
@@ -128,4 +130,17 @@ def load_monitoring_results():
     df = _load_results("monitoring_results", "rowid")
     if not df.empty:
         df["disputed"] = df["disputed"].astype(bool)
+        df["conflicts"] = df["conflicts"].fillna("")
     return df
+
+
+def save_benchmark_results(df):
+    with get_connection() as conn:
+        df.to_sql("benchmark_results", conn, if_exists="replace", index=False)
+
+
+def load_benchmark_results():
+    with get_connection() as conn:
+        if not _table_exists(conn, "benchmark_results"):
+            return pd.DataFrame()
+        return pd.read_sql_query("SELECT * FROM benchmark_results ORDER BY rowid", conn)

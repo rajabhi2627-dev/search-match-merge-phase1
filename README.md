@@ -178,7 +178,27 @@ MANUAL REVIEW is excluded from the binary metrics and reported as the manual rev
 - **Observations:** rule-based – every KPI that is not Green in the latest month, or moved by ≥ 2 percentage
   points, is reported.
 
-## 12. Installation and execution
+## 12. Independent validation
+
+The **Validation** page follows the structure of a model validation report and uses the 600 monitoring records
+(one reporting period per month):
+
+| Analysis | What it shows |
+|---|---|
+| Validation data summary | records processed, matches generated, auto-merged, manual review, new subjects, disputes, incorrect merges |
+| Data quality checks | completeness and validity of every attribute (incoming and master) |
+| Hit rate and dispute rate by period | hit rate = confirmed / generated matches; dispute rate = disputed / generated matches |
+| Search path analysis | which search rule found each correct match, and each attribute's share of the match score |
+| Challenger benchmarking | Jaro-Winkler, Levenshtein, Damerau-Levenshtein, Soundex (name) and Jaccard (address), each replacing one production comparator |
+| Type I / Type II errors | FP / (FP + TN) and FN / (FN + TP) by period |
+| Dispute and incorrect merge analysis | disputed matches, incorrect merges and missed-duplicate disputes by period |
+| Root cause analysis | primary cause of each exception (compared with the true master record) and grouping by error pattern |
+| Threshold calibration | precision, recall and review rate when the MATCH or REVIEW threshold is changed |
+| Validation summary | rule-based observations against the limits in `config.py` |
+
+Root cause grouping is rule-based (records with the same differing attributes form a group); no clustering model is used.
+
+## 13. Installation and execution
 
 ```
 cd search_match_project
@@ -203,11 +223,12 @@ automatically from the bundled FEBRL files when the app starts.
 
 ```
 search_match_project/
-├── app.py              Streamlit interface (5 pages)
+├── app.py              Streamlit interface (6 pages)
 ├── database.py         SQLite creation and queries
 ├── matching.py         normalisation, candidate search, scoring, conflicts, decision
 ├── data_generator.py   FEBRL loading: master, test and monitoring data with ground truth
 ├── performance.py      batch run, metrics, confusion matrices, monitoring KPIs
+├── validation.py       independent validation analyses and challenger algorithms
 ├── config.py           weights, thresholds, dataset and KPI settings
 ├── requirements.txt
 ├── data/febrl/         FEBRL-4 benchmark files

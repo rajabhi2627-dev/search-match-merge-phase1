@@ -72,12 +72,12 @@ def compute_metrics(outcomes):
     }
 
 
-def run_test_matching(test_records, master):
+def run_test_matching(test_records, master, comparators=None):
     """Run the SAME match_record() used by the Search & Match page on every test record."""
     rows = []
     for rec in test_records.to_dict("records"):
         raw_input = {f: rec[f] for f in C.FIELDS}
-        result = match_record(raw_input, master)
+        result = match_record(raw_input, master, comparators)
         best = result["best"]
         true_entity = None if pd.isna(rec["true_entity_id"]) else int(rec["true_entity_id"])
         code = classify_outcome(result["decision"], result["predicted_entity_id"],
@@ -93,8 +93,12 @@ def run_test_matching(test_records, master):
             "best_candidate_name": best["name"] if best else None,
             "predicted_entity_id": result["predicted_entity_id"],
             "match_score": best["overall"] if best else 0.0,
+            "second_score": result["second_score"],
             "score_gap": result["score_gap"],
+            "evidence_weight": best["evidence_weight"] if best else 0.0,
+            "limited_evidence": result["limited_evidence"],
             "candidates_found": result["candidates_found"],
+            "search_path": "; ".join(best["search_reasons"]) if best else "",
             "decision": result["decision"],
             "outcome_code": code,
             "outcome": outcome_label(code),
@@ -233,11 +237,11 @@ def rag_status(kpi, value):
     return "Green" if value <= t["green"] else "Amber" if value <= t["amber"] else "Red"
 
 
-def run_monitoring(master):
+def run_monitoring(master, comparators=None):
     """Match one batch of 100 new records per month, using the same match_record() as everywhere else."""
     frames = []
     for period, records in generate_monitoring_batches().items():
-        results = run_test_matching(pd.DataFrame(records), master)
+        results = run_test_matching(pd.DataFrame(records), master, comparators)
         results.insert(0, "period", period)
         results["disputed"] = simulate_disputes(results, period)
         frames.append(results)

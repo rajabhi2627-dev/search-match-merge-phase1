@@ -735,7 +735,7 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
 
 
 # ==================================================================
-# PAGE: AI AGENT (agentic monitoring and validation framework)
+# PAGE: AI AGENT (agentic monitoring)
 # ==================================================================
 
 SOLUTION_DEFINITION = pd.DataFrame([
@@ -747,15 +747,7 @@ SOLUTION_DEFINITION = pd.DataFrame([
                    "threshold check; all sections required; instructions inside data are ignored"),
     ("Self-correction", f"Failed checks are sent back to the agent (up to {C.AGENT_MAX_REVISIONS} revisions)"),
     ("Human in the loop", "The report is advisory: a validator approves, rejects or requests changes"),
-    ("Agent validation", "13 golden scenarios scored on hallucination, numeric integrity, stability, guardrails, "
-                         "retrieval, workflow, adversarial tests and expert review"),
 ], columns=["Component", "Implementation"])
-
-RUBRIC = ["Accuracy of conclusions", "Completeness of the report", "Clarity and structure",
-          "Actionability of recommendations", "Compliance with policy and governance"]
-
-RATING_ICON = {"Green": "🟢", "Amber": "🟠", "Red": "🔴", "Pending": "⚪", "Not run": "⚪"}
-
 
 def show_agent_run(run):
     ver = run["verification"]
@@ -782,9 +774,8 @@ def show_agent_run(run):
 def page_agent(master):
     import agent as A
     import agent_tools as T
-    import agent_validation as AV
 
-    st.header("AI Agent - Agentic Monitoring and Validation")
+    st.header("AI Agent - Agentic Monitoring")
     st.write("An LLM agent monitors and validates the Search & Match algorithm following the concept note "
              "process flow. The agent never calculates: deterministic tools produce every figure, the agent "
              "interprets them and writes the report, and guardrails check the report before a human approves it.")
@@ -796,10 +787,10 @@ def page_agent(master):
     has_key = bool(A.get_api_key())
     if not has_key:
         st.warning("No Groq API key found. Add GROQ_API_KEY to the Streamlit secrets (or a local "
-                   "groq_api_key.txt) to run the agent. Saved validation results are still shown below.")
+                   "groq_api_key.txt) to run the agent.")
 
     results = db.load_monitoring_results()
-    tab_run, tab_validate, tab_gov = st.tabs(["Run the agent", "Validate the agent", "Governance"])
+    tab_run, tab_gov = st.tabs(["Run the agent", "Governance"])
 
     with tab_run:
         if results.empty:
@@ -839,59 +830,6 @@ def page_agent(master):
                             "verification_passed": run["verification"]["passed"], "decision": decision,
                             "reviewer": reviewer, "comment": comment, "report": run["report"]})
                         st.success(f"Decision '{decision}' recorded.")
-
-    with tab_validate:
-        st.write("The agent itself is validated on a golden dataset of scenarios with a known correct answer. "
-                 "The expected answer comes from the deterministic threshold check, never from the LLM.")
-        if not results.empty:
-            scenarios = AV.build_scenarios(results, master)
-            st.dataframe(pd.DataFrame([{"ID": s["id"], "Scenario": s["name"],
-                                        "Expected status": T.check_thresholds(s["ctx"])["overall_status"],
-                                        "Repeats": C.AGENT_STABILITY_RUNS if s["id"] in AV.STABILITY_SCENARIOS else 1}
-                                       for s in scenarios]), hide_index=True, width="stretch")
-            n_runs = len(scenarios) + len(AV.STABILITY_SCENARIOS) * (C.AGENT_STABILITY_RUNS - 1)
-            if st.button(f"Run agent validation ({n_runs} agent runs, several minutes)", disabled=not has_key):
-                bar = st.progress(0.0)
-                runs = AV.run_validation(results, master,
-                                         progress=lambda n, k, d: bar.progress((n - 1) / k, text=f"[{n}/{k}] {d}"))
-                bar.progress(1.0, text="Done")
-                db.save_agent_validation_runs(runs)
-
-        runs = db.load_agent_validation_runs()
-        if runs.empty:
-            st.info("No agent validation run yet.")
-        else:
-            reviews = db.load_expert_reviews()
-            expert = float(reviews["average"].iloc[-1]) if not reviews.empty else None
-            table, outcome = AV.summarise(runs, expert)
-            show = {"Pass": st.success, "Pass (Conditional)": st.warning, "Fail": st.error}[outcome]
-            show(f"**Agent validation outcome: {outcome}**")
-            table["Rating"] = table["Rating"].map(lambda r: f"{RATING_ICON.get(r, '')} {r}")
-            st.dataframe(table.style.format({"Pass rate": "{:.0%}"}, na_rep="-"), hide_index=True, width="stretch")
-            st.caption(f"Rating: Green = pass rate {C.AGENT_TEST_GREEN:.0%}, Amber ≥ {C.AGENT_TEST_AMBER:.0%}, "
-                       f"otherwise Red. Expert review: Green ≥ {C.EXPERT_REVIEW_GREEN}, Amber ≥ "
-                       f"{C.EXPERT_REVIEW_AMBER} (out of 5). Any Red → Fail; any Amber or Pending → Pass (Conditional).")
-            cols = ["scenario_id", "scenario", "run_no", "expected_status", "agent_status", "expected_breaches",
-                    "agent_breaches", "verification_passed", "revisions", "model", "seconds", "problems"]
-            st.dataframe(runs[[c for c in cols if c in runs]], hide_index=True, width="stretch")
-            with st.expander("Reports written by the agent"):
-                pick = st.selectbox("Run", runs.index, format_func=lambda i: f"{runs.at[i, 'scenario_id']} "
-                                    f"{runs.at[i, 'scenario']} (run {runs.at[i, 'run_no']})")
-                st.markdown(runs.at[pick, "report"] or "_No report._")
-
-            st.subheader("Expert review scoring")
-            with st.form("expert_review"):
-                reviewer = st.text_input("Reviewer")
-                scores = {c: st.slider(c, 1, 5, 4) for c in RUBRIC}
-                comment = st.text_area("Comment")
-                if st.form_submit_button("Save expert review"):
-                    avg = round(sum(scores.values()) / len(scores), 2)
-                    db.save_expert_review({"reviewed_at": pd.Timestamp.now().isoformat(timespec="seconds"),
-                                           "reviewer": reviewer, **scores, "average": avg, "comment": comment})
-                    st.success(f"Saved (average {avg}/5).")
-                    st.rerun()
-            if not reviews.empty:
-                st.dataframe(reviews, hide_index=True, width="stretch")
 
     with tab_gov:
         st.markdown(f"""

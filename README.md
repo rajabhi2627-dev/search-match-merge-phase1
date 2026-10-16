@@ -13,8 +13,9 @@ Included: a SQLite master database, a Search & Match form, a rule-based matching
 Week 4 performance monitoring (KPI dictionary, 6 monthly batches, trends, Green/Amber/Red status)
 and a simple Streamlit dashboard.
 
-Not included: AI agents, LLMs, RAG, machine learning, APIs, authentication.
-The same input always produces the same output.
+The matching algorithm itself uses no machine learning: the same input always produces the same output.
+An LLM is used only in the **AI Agent** page (section 13), which monitors and validates the algorithm
+and is itself validated.
 
 ## 3. Matching workflow
 
@@ -207,7 +208,34 @@ The **Validation** page follows the structure of a model validation report and u
 
 Root cause grouping is rule-based (records with the same differing attributes form a group); no clustering model is used.
 
-## 13. Installation and execution
+## 13. Agentic monitoring and validation framework (AI Agent page)
+
+Follows the concept note *AI Model Validation Framework* (Student 2: Search and Match algorithm with agentic
+monitoring and validation).
+
+| Step | Implementation |
+|---|---|
+| Evidence pipeline | deterministic tools (`agent_tools.py`): data integrity, logic review, KPIs, threshold and breach detection, trends and anomalies, potential incorrect matches, Cochran sampling, change management, root causes |
+| LLM agent | Groq `openai/gpt-oss-120b` (fallback `gpt-oss-20b`, `qwen3.8-27b` when rate-limited), temperature 0; retrieves policy sections with a tool and writes the 9-section report |
+| Guardrails | every number in the report must appear in the evidence; status and breaches must equal the threshold check; all sections present; data issues reported; instructions inside data are ignored |
+| Self-correction | failed checks are returned to the agent (up to 2 revisions) |
+| Human in the loop | the validator approves, rejects or requests changes; decisions are stored |
+
+**Validation of the agent** (`agent_validation.py`): 13 golden scenarios (baseline, all Green, dispute and hit
+rate breaches, incorrect merges, rising Type II trend, missing period, out-of-range value, contradictory figures,
+missing value, proposed threshold change, prompt injection). The expected answer comes from the deterministic
+threshold check. Tests: hallucination, numeric integrity, stability (3 repeats), guardrails and refusal, retrieval
+integrity, workflow consistency, adversarial / stress, and expert review (1-5 rubric). Each test is Green (100 %),
+Amber (≥ 80 %) or Red; any Red = Fail, any Amber or pending review = Pass (Conditional), otherwise Pass.
+
+Run the suite from the command line with `python run_agent_validation.py`; results are saved to
+`data/agent_validation_results.csv` and shown on the dashboard.
+
+**API key:** set `GROQ_API_KEY` as an environment variable, in Streamlit secrets, or in a `groq_api_key.txt`
+next to the project (git-ignored). The key is never stored in the repository. Only aggregated KPIs and public
+FEBRL record IDs are sent to the LLM.
+
+## 14. Installation and execution
 
 ```
 cd search_match_project
@@ -215,10 +243,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Open http://localhost:8501. No API keys are required.
+Open http://localhost:8501. Only the AI Agent page needs a Groq API key.
 
 Demo flow: **Search & Match** → **Test Data** (Generate 100 Test Records → Run Matching) → **Performance**
-→ **Monitoring** (Run Monthly Monitoring) → **Methodology**.
+→ **Monitoring** (Run Monthly Monitoring) → **Validation** → **AI Agent** → **Methodology**.
 
 Run the tests: `python -m pytest -q`
 
@@ -226,13 +254,18 @@ Run the tests: `python -m pytest -q`
 
 The app can be deployed from this GitHub repository at https://share.streamlit.io
 (branch `main`, main file `app.py`). The SQLite database is not stored in the repository; it is built
-automatically from the bundled FEBRL files when the app starts.
+automatically from the bundled FEBRL files when the app starts. For the AI Agent page add
+`GROQ_API_KEY = "..."` under **App settings → Secrets**.
 
 ## Project structure
 
 ```
 search_match_project/
-├── app.py              Streamlit interface (6 pages)
+├── app.py              Streamlit interface (7 pages)
+├── agent.py            AI agent: evidence pipeline, Groq LLM loop, guardrails, self-correction
+├── agent_tools.py      deterministic tools and policy used by the agent
+├── agent_validation.py golden scenarios and validation tests of the agent
+├── run_agent_validation.py  command-line runner for the agent validation suite
 ├── database.py         SQLite creation and queries
 ├── matching.py         normalisation, candidate search, scoring, conflicts, decision
 ├── data_generator.py   FEBRL loading: master, test and monitoring data with ground truth
@@ -242,5 +275,6 @@ search_match_project/
 ├── requirements.txt
 ├── data/febrl/         FEBRL-4 benchmark files
 ├── data/matching.db    created automatically
-└── tests/test_matching.py
+├── data/agent_validation_results.csv  latest agent validation run
+└── tests/              test_matching.py, test_agent.py (no LLM calls)
 ```

@@ -471,6 +471,18 @@ Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below tha
 **Mitigating controls**: conflict rules and the score gap send uncertain cases to manual review; the Monitoring and
 Validation pages track error rates, disputes and root causes over time.
 """)
+
+    st.subheader("15. AI agent (monitoring and validation)")
+    st.markdown(f"""
+- The matching algorithm uses no AI. An LLM agent (Groq `{C.GROQ_MODEL}`) only **monitors and validates** it.
+- Deterministic tools calculate every figure; the agent interprets them and writes the report.
+- Guardrails reject reports with numbers not found in the evidence, a wrong status or wrong breaches, or missing
+  sections; the agent then revises (up to {C.AGENT_MAX_REVISIONS} times).
+- The report is advisory: a human validator records the final decision (human in the loop).
+- The agent itself is validated on 13 golden scenarios (hallucination, numeric integrity, stability, guardrails,
+  retrieval, workflow, adversarial tests and expert review). LLM output can still vary between runs, which is why
+  stability is tested and human approval stays mandatory.
+""")
     st.caption("All parameters are in config.py. Data is stored in data/matching.db.")
 
 
@@ -723,6 +735,184 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
 
 
 # ==================================================================
+# PAGE: AI AGENT (agentic monitoring and validation framework)
+# ==================================================================
+
+SOLUTION_DEFINITION = pd.DataFrame([
+    ("Model", "Search & Match algorithm (deterministic fuzzy matching, FEBRL-4 data)"),
+    ("Agent", f"LLM agent on Groq ({C.GROQ_MODEL}, fallback {', '.join(C.GROQ_FALLBACK_MODELS)}), temperature 0"),
+    ("Tools", "Deterministic Python tools: data integrity, logic review, KPIs, thresholds, trends, potential "
+              "incorrect matches, sampling, change management, root causes, policy retrieval"),
+    ("Guardrails", "Every number in the report must come from the evidence; status and breaches must match the "
+                   "threshold check; all sections required; instructions inside data are ignored"),
+    ("Self-correction", f"Failed checks are sent back to the agent (up to {C.AGENT_MAX_REVISIONS} revisions)"),
+    ("Human in the loop", "The report is advisory: a validator approves, rejects or requests changes"),
+    ("Agent validation", "13 golden scenarios scored on hallucination, numeric integrity, stability, guardrails, "
+                         "retrieval, workflow, adversarial tests and expert review"),
+], columns=["Component", "Implementation"])
+
+RUBRIC = ["Accuracy of conclusions", "Completeness of the report", "Clarity and structure",
+          "Actionability of recommendations", "Compliance with policy and governance"]
+
+RATING_ICON = {"Green": "🟢", "Amber": "🟠", "Red": "🔴", "Pending": "⚪", "Not run": "⚪"}
+
+
+def show_agent_run(run):
+    ver = run["verification"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Overall status", run["overall_status"] or "-")
+    c2.metric("Verification", "Passed" if ver["passed"] else "Failed")
+    c3.metric("Revisions", run["revisions"])
+    c4.metric("Run time", f"{run['seconds']} s")
+    breaches = ", ".join(f"{b['kpi']} ({b['status']})" for b in run["breaches"]) or "none"
+    st.caption(f"Model: {run['model']} · Numbers checked: {ver.get('numbers_checked', 0)} · Breaches: {breaches}")
+    with st.expander("Agent trace (each workflow step)"):
+        st.dataframe(pd.DataFrame([{"Step": s["step"], "Actor": s.get("actor", ""), "Stage": s.get("stage", s["type"]),
+                                    "Tool": s.get("tool", ""), "Detail": s.get("detail", "")} for s in run["trace"]]),
+                     hide_index=True, width="stretch")
+    with st.expander("Guardrail checks"):
+        st.dataframe(pd.DataFrame([{"Check": k.replace("_", " ").capitalize(), "Result": "Pass" if v else "Fail"}
+                                   for k, v in ver.get("checks", {}).items()]), hide_index=True, width="stretch")
+        for p in ver.get("problems", []):
+            st.warning(p)
+    st.markdown(run["report"] or "_No report was submitted._")
+    st.download_button("Download report (Markdown)", run["report"], file_name=f"agent_report_{run['period']}.md")
+
+
+def page_agent(master):
+    import agent as A
+    import agent_tools as T
+    import agent_validation as AV
+
+    st.header("AI Agent - Agentic Monitoring and Validation")
+    st.write("An LLM agent monitors and validates the Search & Match algorithm following the concept note "
+             "process flow. The agent never calculates: deterministic tools produce every figure, the agent "
+             "interprets them and writes the report, and guardrails check the report before a human approves it.")
+    st.dataframe(SOLUTION_DEFINITION, hide_index=True, width="stretch")
+    st.markdown("**Process flow:** Input data → Data integrity → Search and match logic review → Performance "
+                "monitoring → Threshold and breach detection → Breaches, trends and anomalies → Sampling and "
+                "validation → Change management → Findings → Report → Human approval")
+
+    has_key = bool(A.get_api_key())
+    if not has_key:
+        st.warning("No Groq API key found. Add GROQ_API_KEY to the Streamlit secrets (or a local "
+                   "groq_api_key.txt) to run the agent. Saved validation results are still shown below.")
+
+    results = db.load_monitoring_results()
+    tab_run, tab_validate, tab_gov = st.tabs(["Run the agent", "Validate the agent", "Governance"])
+
+    with tab_run:
+        if results.empty:
+            st.info("Run the monitoring first (Monitoring or Validation page).")
+        else:
+            periods = list(results["period"].unique())
+            col1, col2 = st.columns(2)
+            period = col1.selectbox("Assessed period", periods, index=len(periods) - 1)
+            propose = col2.checkbox("Assess a proposed threshold change")
+            change = None
+            if propose:
+                c1, c2 = st.columns(2)
+                mt = c1.number_input("Proposed MATCH threshold", 50, 100, C.MATCH_THRESHOLD)
+                rt = c2.number_input("Proposed REVIEW threshold", 40, 95, C.REVIEW_THRESHOLD)
+                change = {k: int(v) for k, v, cur in [("match_threshold", mt, C.MATCH_THRESHOLD),
+                                                      ("review_threshold", rt, C.REVIEW_THRESHOLD)] if v != cur}
+            if st.button("Run AI Agent", type="primary", disabled=not has_key):
+                with st.status("Agent running...", expanded=True) as status:
+                    ctx = T.live_context(results, master, period=period, proposed_change=change or None)
+                    run = A.run_agent(ctx, on_step=lambda s: st.write(
+                        f"Step {s['step']}: {s.get('stage') or s['type']} {('- ' + s['tool']) if s.get('tool') else ''}"))
+                    status.update(label="Agent finished", state="complete", expanded=False)
+                st.session_state["agent_run"] = run
+            run = st.session_state.get("agent_run")
+            if run:
+                show_agent_run(run)
+                st.subheader("Human approval")
+                with st.form("approval"):
+                    reviewer = st.text_input("Validator name")
+                    decision = st.radio("Decision", ["Approve", "Request changes", "Reject"], horizontal=True)
+                    comment = st.text_area("Comment")
+                    if st.form_submit_button("Record decision"):
+                        db.save_agent_run({
+                            "run_at": pd.Timestamp.now().isoformat(timespec="seconds"), "period": run["period"],
+                            "model": run["model"], "overall_status": run["overall_status"],
+                            "breaches": ", ".join(f"{b['kpi']}:{b['status']}" for b in run["breaches"]),
+                            "verification_passed": run["verification"]["passed"], "decision": decision,
+                            "reviewer": reviewer, "comment": comment, "report": run["report"]})
+                        st.success(f"Decision '{decision}' recorded.")
+
+    with tab_validate:
+        st.write("The agent itself is validated on a golden dataset of scenarios with a known correct answer. "
+                 "The expected answer comes from the deterministic threshold check, never from the LLM.")
+        if not results.empty:
+            scenarios = AV.build_scenarios(results, master)
+            st.dataframe(pd.DataFrame([{"ID": s["id"], "Scenario": s["name"],
+                                        "Expected status": T.check_thresholds(s["ctx"])["overall_status"],
+                                        "Repeats": C.AGENT_STABILITY_RUNS if s["id"] in AV.STABILITY_SCENARIOS else 1}
+                                       for s in scenarios]), hide_index=True, width="stretch")
+            n_runs = len(scenarios) + len(AV.STABILITY_SCENARIOS) * (C.AGENT_STABILITY_RUNS - 1)
+            if st.button(f"Run agent validation ({n_runs} agent runs, several minutes)", disabled=not has_key):
+                bar = st.progress(0.0)
+                runs = AV.run_validation(results, master,
+                                         progress=lambda n, k, d: bar.progress((n - 1) / k, text=f"[{n}/{k}] {d}"))
+                bar.progress(1.0, text="Done")
+                db.save_agent_validation_runs(runs)
+
+        runs = db.load_agent_validation_runs()
+        if runs.empty:
+            st.info("No agent validation run yet.")
+        else:
+            reviews = db.load_expert_reviews()
+            expert = float(reviews["average"].iloc[-1]) if not reviews.empty else None
+            table, outcome = AV.summarise(runs, expert)
+            show = {"Pass": st.success, "Pass (Conditional)": st.warning, "Fail": st.error}[outcome]
+            show(f"**Agent validation outcome: {outcome}**")
+            table["Rating"] = table["Rating"].map(lambda r: f"{RATING_ICON.get(r, '')} {r}")
+            st.dataframe(table.style.format({"Pass rate": "{:.0%}"}, na_rep="-"), hide_index=True, width="stretch")
+            st.caption(f"Rating: Green = pass rate {C.AGENT_TEST_GREEN:.0%}, Amber ≥ {C.AGENT_TEST_AMBER:.0%}, "
+                       f"otherwise Red. Expert review: Green ≥ {C.EXPERT_REVIEW_GREEN}, Amber ≥ "
+                       f"{C.EXPERT_REVIEW_AMBER} (out of 5). Any Red → Fail; any Amber or Pending → Pass (Conditional).")
+            cols = ["scenario_id", "scenario", "run_no", "expected_status", "agent_status", "expected_breaches",
+                    "agent_breaches", "verification_passed", "revisions", "model", "seconds", "problems"]
+            st.dataframe(runs[[c for c in cols if c in runs]], hide_index=True, width="stretch")
+            with st.expander("Reports written by the agent"):
+                pick = st.selectbox("Run", runs.index, format_func=lambda i: f"{runs.at[i, 'scenario_id']} "
+                                    f"{runs.at[i, 'scenario']} (run {runs.at[i, 'run_no']})")
+                st.markdown(runs.at[pick, "report"] or "_No report._")
+
+            st.subheader("Expert review scoring")
+            with st.form("expert_review"):
+                reviewer = st.text_input("Reviewer")
+                scores = {c: st.slider(c, 1, 5, 4) for c in RUBRIC}
+                comment = st.text_area("Comment")
+                if st.form_submit_button("Save expert review"):
+                    avg = round(sum(scores.values()) / len(scores), 2)
+                    db.save_expert_review({"reviewed_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+                                           "reviewer": reviewer, **scores, "average": avg, "comment": comment})
+                    st.success(f"Saved (average {avg}/5).")
+                    st.rerun()
+            if not reviews.empty:
+                st.dataframe(reviews, hide_index=True, width="stretch")
+
+    with tab_gov:
+        st.markdown(f"""
+- **Human in the loop:** the agent's report is advisory. Only a validator's recorded decision makes it final.
+- **No autonomous changes:** the agent cannot change thresholds or data; it only reads tool outputs.
+- **Change management:** threshold changes are classified by impact - up to 1.0 pp minor, up to 3.0 pp moderate,
+  above that major (Model Risk / Governance Committee).
+- **Data protection:** only aggregated KPIs and record IDs from the public FEBRL benchmark are sent to the LLM.
+- **Audit trail:** every decision and expert review is stored in the database with time and reviewer.
+- **Model:** `{C.GROQ_MODEL}` at temperature {C.AGENT_TEMPERATURE}; fallbacks when rate-limited:
+  {', '.join(f'`{m}`' for m in C.GROQ_FALLBACK_MODELS)}.
+""")
+        decisions = db.load_agent_runs()
+        st.subheader("Approval history")
+        if decisions.empty:
+            st.info("No decisions recorded yet.")
+        else:
+            st.dataframe(decisions.drop(columns=["report"]), hide_index=True, width="stretch")
+
+
+# ==================================================================
 # NAVIGATION
 # ==================================================================
 
@@ -731,7 +921,7 @@ def main():
     st.sidebar.title("Search, Match & Merge")
     st.sidebar.caption("Phase 1 prototype - deterministic matching")
     page = st.sidebar.radio("Go to", ["Search & Match", "Test Data", "Performance", "Monitoring", "Validation",
-                                      "Methodology"])
+                                      "AI Agent", "Methodology"])
     st.sidebar.divider()
     st.sidebar.caption(f"Dataset: {C.DATASET_NAME} benchmark")
     st.sidebar.caption(f"Master records: {len(master_df):,}")
@@ -746,6 +936,8 @@ def main():
         page_monitoring(master)
     elif page == "Validation":
         page_validation(master_df, master)
+    elif page == "AI Agent":
+        page_agent(master)
     else:
         page_methodology()
 

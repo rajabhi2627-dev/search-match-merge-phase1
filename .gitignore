@@ -1,3 +1,6 @@
 data/*.db
 __pycache__/
 .pytest_cache/
+groq_api_key.txt
+.env
+.streamlit/secrets.toml

@@ -11,6 +11,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 DB_PATH = DATA_DIR / "matching.db"
+AGENT_VALIDATION_CSV = DATA_DIR / "agent_validation_results.csv"
 
 # ------------------------------------------------------------------
 # Fields - exactly the person fields available in the FEBRL-4 benchmark
@@ -151,6 +152,59 @@ VALIDATION_LIMITS = {
     "incorrect_merge_rate": 0.01,  # incorrect merges below 1% of generated matches
     "max_attribute_share": 0.50,  # no single attribute should drive more than 50% of the match score
 }
+
+# ------------------------------------------------------------------
+# AI validation agent (AI Agent page)
+# ------------------------------------------------------------------
+# The LLM interprets the evidence and writes the report. Every number comes from deterministic tools,
+# and every number in the report is verified against the evidence before a human approves it.
+GROQ_MODEL = "openai/gpt-oss-120b"
+# Each Groq model has its own token limits; when one is rate-limited the agent moves to the next one.
+GROQ_FALLBACK_MODELS = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+AGENT_TEMPERATURE = 0
+AGENT_MAX_STEPS = 8              # maximum LLM calls per run
+AGENT_MAX_OUTPUT_TOKENS = 4500
+GROQ_TOKENS_PER_MINUTE = 8000    # Groq free tier limit per model (prompt + output)
+AGENT_MAX_REVISIONS = 2          # self-correction rounds when verification fails
+AGENT_STABILITY_RUNS = 3         # repeated runs per stability scenario
+
+ANOMALY_CHANGE_PP = 5.0          # month-on-month KPI change (percentage points) flagged as an anomaly
+TREND_PERIODS = 3                # consecutive deteriorations that count as an adverse trend
+NEAR_THRESHOLD_MARGIN = 5        # MATCH decisions scoring < MATCH_THRESHOLD + margin are flagged
+SMALL_GAP_MARGIN = 10            # MATCH decisions with score gap < this are flagged
+
+# Sampling for manual validation (Cochran formula with finite population correction)
+SAMPLE_Z = 1.96                  # 95% confidence
+SAMPLE_MARGIN = 0.05             # +/- 5% margin of error
+SAMPLE_EXPECTED_ERROR = 0.05     # expected error rate in matching decisions
+
+# Change management: approval level by the largest impact (percentage points) on
+# hit rate, Type I or Type II error rate.
+CHANGE_APPROVAL_LEVELS = [
+    (1.0, "Minor - approval by the Search & Match team lead"),
+    (3.0, "Moderate - approval by the Head of Data Management"),
+    (None, "Major - approval by the Model Risk / Governance Committee"),
+]
+CHANGE_LOG = [
+    {"version": "1.0", "date": "2026-10-07", "change": "Initial prototype on synthetic data",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.0", "date": "2026-10-07", "change": "Switched to the FEBRL-4 benchmark; Week 4 monitoring added",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.1", "date": "2026-10-07",
+     "change": "FEBRL fields only: email and company removed, Soc. Sec. ID digit comparison, weights 35/35/15/7.5/7.5",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.2", "date": "2026-10-16", "change": "Independent validation page added",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.3", "date": "2026-10-16",
+     "change": "Hit rate, dispute rate, incorrect merge rate and Type I/II errors use the validation-report formulas",
+     "impact_assessed": True, "approved_by": None},
+]
+
+# Acceptance criteria for the agent validation tests (share of scenario runs that must pass)
+AGENT_TEST_GREEN = 1.00
+AGENT_TEST_AMBER = 0.80
+EXPERT_REVIEW_GREEN = 4.0        # average rubric score (1-5)
+EXPERT_REVIEW_AMBER = 3.0
 
 # KPI thresholds. direction "higher" = higher is better.
 #   higher: Green >= green, Amber >= amber, otherwise Red

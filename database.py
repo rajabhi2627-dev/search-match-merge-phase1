@@ -7,6 +7,9 @@ Tables
   match_results  : output of running the matcher on the test records
   monitoring_results : 6 monthly batches used for Week 4 performance monitoring
   benchmark_results  : challenger algorithm benchmarking summary (Validation page)
+  agent_runs         : AI agent reports with the human approval decision (AI Agent page)
+  agent_validation_runs : latest run of the agent validation suite (golden scenarios)
+  expert_reviews     : expert review scores of the agent (1-5 rubric)
   meta           : which dataset the database was built from
 """
 import sqlite3
@@ -140,7 +143,51 @@ def save_benchmark_results(df):
 
 
 def load_benchmark_results():
+    return _load_table("benchmark_results")
+
+
+def _load_table(table):
     with get_connection() as conn:
-        if not _table_exists(conn, "benchmark_results"):
+        if not _table_exists(conn, table):
             return pd.DataFrame()
-        return pd.read_sql_query("SELECT * FROM benchmark_results ORDER BY rowid", conn)
+        return pd.read_sql_query(f"SELECT * FROM {table} ORDER BY rowid", conn)
+
+
+def _append(table, row):
+    with get_connection() as conn:
+        pd.DataFrame([row]).to_sql(table, conn, if_exists="append", index=False)
+
+
+# ---------------- AI agent ----------------
+
+def save_agent_validation_runs(df):
+    """Latest run of the agent validation suite (also exported to CSV so it is visible on Streamlit Cloud)."""
+    with get_connection() as conn:
+        df.to_sql("agent_validation_runs", conn, if_exists="replace", index=False)
+    df.to_csv(C.AGENT_VALIDATION_CSV, index=False)
+
+
+def load_agent_validation_runs():
+    df = _load_table("agent_validation_runs")
+    if df.empty and C.AGENT_VALIDATION_CSV.exists():
+        df = pd.read_csv(C.AGENT_VALIDATION_CSV, keep_default_na=False)
+    if not df.empty:
+        df["verification_passed"] = df["verification_passed"].astype(str).isin(["True", "1", "true"])
+    return df
+
+
+def save_agent_run(row):
+    """Agent report together with the human validator's decision."""
+    _append("agent_runs", row)
+
+
+def load_agent_runs():
+    return _load_table("agent_runs")
+
+
+def save_expert_review(row):
+    _append("expert_reviews", row)
+
+
+def load_expert_reviews():
+    return _load_table("expert_reviews")

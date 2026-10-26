@@ -165,16 +165,28 @@ VALIDATION_LIMITS = {
 # The LLM interprets the evidence and writes the report. Every number comes from deterministic tools,
 # and every number in the report is verified against the evidence before a human approves it.
 GROQ_MODEL = "openai/gpt-oss-120b"
-# Each Groq model has its own token limits; when one is rate-limited the agent moves to the next one.
-GROQ_FALLBACK_MODELS = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+# Production models only (Groq Preview models such as Qwen are for evaluation and are retired at short notice).
+# Each model has its own token limits; when the main model is rate-limited the agent first waits up to
+# PRIMARY_MODEL_MAX_WAIT seconds for it, and only then moves to the fallback.
+GROQ_FALLBACK_MODELS = ["openai/gpt-oss-20b"]
+PRIMARY_MODEL_MAX_WAIT = 45      # seconds
 AGENT_TEMPERATURE = 0
 AGENT_MAX_STEPS = 8              # maximum LLM calls per run
-AGENT_MAX_OUTPUT_TOKENS = 4500
-GROQ_TOKENS_PER_MINUTE = 8000    # Groq free tier limit per model (prompt + output)
+AGENT_MAX_OUTPUT_TOKENS = 6000
+AGENT_REPORT_MAX_WORDS = 1000    # length limit for the AI report
+# Groq tokens per minute per model (prompt + output). 8,000 = free tier; the Developer plan allows 250,000.
+# Override without changing code: set GROQ_TOKENS_PER_MINUTE in the Streamlit secrets or the environment.
+GROQ_TOKENS_PER_MINUTE = 8000
 AGENT_MAX_REVISIONS = 2          # self-correction rounds when verification fails
 AGENT_STABILITY_RUNS = 3         # repeated runs per stability scenario
 
-ANOMALY_CHANGE_PP = 5.0          # month-on-month KPI change (percentage points) flagged as an anomaly
+# Full validation report (Validation page, section 11): names on the cover and in the text.
+REPORT_TITLE = "Search and Match Model Validation Report"
+REPORT_ORGANISATION = "Credit Information Company"            # owner of the Search & Match model
+REPORT_VALIDATOR = "Independent Model Validation Function"    # who performs the validation
+REPORT_SECTION_REVISIONS = 1     # AI self-corrections per report part when a check fails
+
+ANOMALY_CHANGE_PP = 5.0         # month-on-month KPI change (percentage points) flagged as an anomaly
 TREND_PERIODS = 3                # consecutive deteriorations that count as an adverse trend
 NEAR_THRESHOLD_MARGIN = 5        # MATCH decisions scoring < MATCH_THRESHOLD + margin are flagged
 SMALL_GAP_MARGIN = 10            # MATCH decisions with score gap < this are flagged

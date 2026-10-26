@@ -39,6 +39,21 @@ METRIC_DEFINITIONS = pd.DataFrame([
 ])
 
 
+# Display settings shared by the Validation page and the PDF report.
+PERCENT_COLUMNS = ["hit_rate", "dispute_rate", "incorrect_merge_rate", "type1_error", "type2_error",
+                   "precision", "recall", "review_rate", "Share of matches", "Contribution", "Configured weight",
+                   "Incoming completeness", "Incoming validity", "Master completeness", "Master validity"]
+REPORT_LABELS = {
+    "period": "Period", "records": "Records processed", "matches_generated": "Matches generated",
+    "confirmed": "Confirmed matches", "auto_merged": "Auto-merged", "manual_review": "Manual review",
+    "disputed_matches": "Disputed matches", "duplicate_disputes": "Missed-duplicate disputes",
+    "incorrect_merges": "Incorrect merges", "hit_rate": "Hit rate", "dispute_rate": "Dispute rate",
+    "incorrect_merge_rate": "Incorrect merge rate", "type1_error": "Type I error (FP)",
+    "type2_error": "Type II error (FN)", "precision": "Precision", "recall": "Recall",
+    "review_rate": "Manual review rate",
+}
+
+
 def by_period(results):
     rows = []
     for period in C.MONITORING_PERIODS:
@@ -375,3 +390,61 @@ def observations(periods, contribution, benchmark, rca, quality):
     add("Data quality", worst["Incoming completeness"] >= 0.90,
         f"Lowest completeness among incoming records: {worst['Attribute']} at {worst['Incoming completeness']:.1%}.")
     return notes
+
+
+# ==================================================================
+# All sections in one structure (used by the PDF report)
+# ==================================================================
+
+def report_sections(results, benchmark, master_df, master):
+    """The 10 Validation page sections as data: [{title, note, tables: [(caption, DataFrame)], ...}]."""
+    periods = by_period(results)
+    quality = data_quality(results, master_df)
+    paths = search_path_analysis(results)
+    contribution = attribute_contribution(results)
+    exceptions = root_cause_analysis(results, master)
+    rca = root_cause_summary(exceptions)
+    calibration = threshold_calibration(results)
+    cutoffs = ", ".join(f"{k} >= {v}" for k, v in C.CHALLENGER_CUTOFFS.items())
+    calibration_cols = ["MATCH threshold", "REVIEW threshold", "Current setting", "precision", "recall",
+                        "review_rate", "type1_error", "type2_error", "incorrect_merges"]
+    return [
+        {"title": "1. Validation data summary", "note": "",
+         "tables": [("", data_summary(results, len(master_df)))]},
+        {"title": "2. Data quality checks",
+         "note": "Completeness = share of records where the attribute is filled. Validity = share of filled values "
+                 "that pass the rule.",
+         "tables": [("", quality)]},
+        {"title": "3. Hit rate and dispute rate by period", "note": "",
+         "tables": [("", periods[["period", "records", "matches_generated", "confirmed", "disputed_matches",
+                                  "hit_rate", "dispute_rate"]])],
+         "trend": periods[["period", "hit_rate", "dispute_rate", "type2_error"]]},
+        {"title": "4. Search path analysis",
+         "note": "Which search rule found the correct person (correct automatic matches only), and the share of "
+                 "the weighted match score contributed by each attribute.",
+         "tables": [("Search rules", paths), ("Attribute contribution", contribution)]},
+        {"title": "5. Challenger algorithm benchmarking",
+         "note": "Each challenger replaces one production comparator; search, weights and decision rules stay the "
+                 f"same. Challenger cut-offs: {cutoffs}.",
+         "tables": [("", benchmark[["Algorithm", "matches_generated", "confirmed", "hit_rate", "precision", "recall",
+                                    "type1_error", "type2_error", "incorrect_merges", "dispute_rate",
+                                    "review_rate"]])]},
+        {"title": "6. Type I and Type II error assessment",
+         "note": "Type I error (false positive): two different people matched. Type II error (false negative): "
+                 "the same person not matched.",
+         "tables": [("", periods[["period", "records", "TP", "FP", "TN", "FN", "type1_error", "type2_error"]])]},
+        {"title": "7. Dispute and incorrect merge analysis",
+         "note": "Disputed matches = 'does not belong to me' complaints about automatic matches. Missed-duplicate "
+                 "disputes come from Type II errors.",
+         "tables": [("", periods[["period", "matches_generated", "disputed_matches", "dispute_rate",
+                                  "incorrect_merges", "incorrect_merge_rate", "duplicate_disputes"]])]},
+        {"title": "8. Root cause analysis of exceptions",
+         "note": f"Exceptions = missed duplicates, wrong merges and manual reviews ({len(exceptions)} records).",
+         "tables": [("Primary root cause", rca), ("Grouping by error pattern", error_patterns(exceptions))]},
+        {"title": "9. Threshold calibration",
+         "note": "Decisions recomputed for other thresholds while everything else stays the same.",
+         "tables": [(f"Varying the {v}", calibration[calibration["Varied"] == v][calibration_cols])
+                    for v in ("MATCH threshold", "REVIEW threshold")]},
+        {"title": "10. Validation summary", "note": "", "tables": [],
+         "observations": observations(periods, contribution, benchmark, rca, quality)},
+    ]

@@ -224,6 +224,12 @@ monitoring and validation).
 | Guardrails | every number in the report must appear in the evidence; status and breaches must equal the threshold check; all sections present; data issues reported; instructions inside data are ignored |
 | Self-correction | failed checks are returned to the agent (up to 2 revisions) |
 | Human in the loop | the validator approves, rejects or requests changes; decisions are stored |
+| PDF report | `report_pdf.py`: AI report + guardrail checks + all 10 coded validation sections + validator sign-off + agent trace |
+
+**PDF validation report.** On the Validation page, tick *Then run the AI validation and prepare the PDF report*
+before *Run Validation* (or use section 11 afterwards). The agent assesses the latest period (trends use all
+periods) and the full report downloads as a PDF. The AI Agent page offers the same PDF; after the validator
+records a decision there, a signed version with the decision on the sign-off page is available.
 
 **Validation of the agent** (`agent_validation.py`): 13 golden scenarios (baseline, all Green, dispute and hit
 rate breaches, incorrect merges, rising Type II trend, missing period, out-of-range value, contradictory figures,
@@ -275,10 +281,11 @@ search_match_project/
 ├── data_generator.py   FEBRL loading: master, test and monitoring data with ground truth
 ├── performance.py      batch run, metrics, confusion matrices, monitoring KPIs
 ├── validation.py       independent validation analyses and challenger algorithms
+├── report_pdf.py       PDF validation report (AI report + coded results + sign-off)
 ├── config.py           weights, thresholds, dataset and KPI settings
 ├── requirements.txt
 ├── data/febrl/         FEBRL-4 benchmark files
 ├── data/matching.db    created automatically
 ├── data/agent_validation_results.csv  latest agent validation run
-└── tests/              test_matching.py, test_agent.py (no LLM calls)
+└── tests/              test_matching.py, test_agent.py, test_report_pdf.py (no LLM calls)
 ```

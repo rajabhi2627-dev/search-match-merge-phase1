@@ -243,6 +243,10 @@ def render_full_docx(report, approval=None):
             p.add_run(block["text"]).bold = True
             p.paragraph_format.space_after = Pt(2)
             p.paragraph_format.keep_with_next = True
+        elif kind == "note":
+            p = document.add_paragraph()
+            _runs(p, block["text"], size=8.5, color=MUTED)
+            p.runs[0].italic = True
         elif kind == "bullets":
             for text in block["items"]:
                 _runs(document.add_paragraph(style="List Bullet"), text)

@@ -600,6 +600,8 @@ def render_full_pdf(report, approval=None):
             story.append(Paragraph(_full_inline(block["text"]), S["body"]))
         elif kind == "label":
             story.append(Paragraph(escape(_ascii_safe(block["text"])), FULL["label"]))
+        elif kind == "note":
+            story.append(Paragraph("<i>" + escape(_ascii_safe(block["text"])) + "</i>", S["note"]))
         elif kind in ("bullets", "numbered"):
             items = [ListItem(Paragraph(_full_inline(t), S["body"]), leftIndent=12) for t in block["items"]]
             if items:

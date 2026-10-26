@@ -11,13 +11,15 @@ Who writes what
   - AI agent: the analysis points, observations, recommendations and summaries, written from the evidence.
   - Guardrails: every number in the AI text must appear in the evidence, KPI values must sit next to the right
     KPI, the AI rating must equal the rule-based rating, and qualitative tables must cover the fixed areas.
-    A part that fails is sent back once with the problems; if it still fails, rule-based text replaces it and
-    Annexure B says so.
+    All text is written by the AI: a part that fails is sent back with the problems for up to
+    REPORT_SECTION_REVISIONS correction rounds; if it still fails, the AI text is kept, marked in the report and
+    listed in Annexure B.
 
 build_report(...) returns {"blocks": [...], "meta": {...}, "log": [...]}; report_pdf / report_docx render it.
 """
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -513,8 +515,9 @@ def check_answer(parts, answer, evidence, rates, overall, extra_allowed=()):
 def groq_ask(client=None, models=None):
     """Returns ask(call, evidence, check) -> (answer, model, revisions, problems) using Groq.
 
-    Never raises for a failed part: whatever cannot be written within the token limit, or fails its checks after
-    one revision, is reported in `problems` and replaced by rule-based text."""
+    All text is written by the AI. A part that fails its checks is sent back with the problems (only the failed
+    parts, so the request stays small) for up to REPORT_SECTION_REVISIONS rounds. When Groq is busy the call waits
+    and tries again. If Groq gives no answer at all, a RuntimeError stops the report."""
     import groq
     client = client or A.get_client()
     models = models or [C.GROQ_MODEL] + C.GROQ_FALLBACK_MODELS
@@ -529,14 +532,19 @@ def groq_ask(client=None, models=None):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
         if note:
             messages.append({"role": "user", "content": note})
-        for _ in range(3):  # attempts per request
+        busy = 0
+        for _ in range(6):  # attempts per request
             try:
                 response, data["model"] = A._chat(client, messages, [tool], models,
                                                   max_output=REPORT_PART_MAX_OUTPUT)
             except groq.BadRequestError:
-                continue  # usually an answer cut off by the token limit; ask again with the same, fixed size
+                continue  # usually an answer cut off by the token limit; ask again
             except RuntimeError:
-                return None  # nothing fits or every model is unavailable: fall back to rule-based text
+                busy += 1  # every model rate-limited or unavailable: wait for the limit to reset
+                if busy > 3:
+                    return None
+                time.sleep(60)
+                continue
             calls = [c for c in (response.choices[0].message.tool_calls or []) if c.function.name == "submit"]
             if calls:
                 try:
@@ -547,11 +555,12 @@ def groq_ask(client=None, models=None):
 
     def ask(call, evidence, check):
         parts = CALL_PARTS[call]
-        answer = request(parts, evidence) or {}
-        problems = check(answer)
-        revisions = 0
-        if problems and C.REPORT_SECTION_REVISIONS:
-            # Revise only the failed parts: a small request that always fits the token limit.
+        answer = request(parts, evidence)
+        if answer is None:
+            raise RuntimeError("Groq did not return an answer (the service may be busy or rate-limited). "
+                               "Please try again in a few minutes.")
+        problems, revisions = check(answer), 0
+        while problems and revisions < C.REPORT_SECTION_REVISIONS:
             failed = [p for p in parts if p in problems]
             listed = "\n".join(f"- {p}" for part in failed for p in problems[part])
             previous = json.dumps({p: answer.get(p) for p in failed})
@@ -559,58 +568,49 @@ def groq_ask(client=None, models=None):
                 previous = previous[:3000] + " ..."
             revised = request(failed, evidence, "Your previous answer for these parts was rejected by the "
                                                 f"automatic checks:\n{listed}\n\nPrevious answer:\n{previous}\n\n"
-                                                "Write these parts again, fixing the problems.") or {}
-            revisions = 1
+                                                "Write these parts again, fixing every problem listed.") or {}
+            revisions += 1
             answer = {**answer, **{p: revised[p] for p in failed if p in revised}}
             problems = check(answer)
         return answer, data.get("model"), revisions, problems
     return ask
 
 
-# ==================================================================
-# Rule-based fallback text (used when an AI part fails its checks)
-# ==================================================================
-
-FALLBACK_AREAS = {"performance": ["Hit rate", "Disputes and incorrect merges"],
-                  "search_path": ["Search path / attribute reliance"], "challenger": ["Challenger benchmarking"],
-                  "errors": ["Type I error", "Type II error"], "disputes": ["Disputes and incorrect merges"],
-                  "rca": ["Root cause analysis"]}
-NOT_ASSESSED = "This area could not be assessed automatically and is to be completed by the validator."
-
-
-def fallback(part, ev, rates):
+def _shape(part, value):
+    """Make an AI answer safe to render even if it did not pass every check (no text is added)."""
+    def text(v):
+        return "" if v is None else (v if isinstance(v, str) else json.dumps(v))
     if part in QUANT_SECTIONS:
-        notes = [ev["notes"][a]["Observation"] for a in FALLBACK_AREAS.get(part, []) if a in ev["notes"]]
-        if part == "calibration":
-            cur = ev["calibration"][ev["calibration"]["Current setting"]].iloc[0]
-            notes = [f"At the current thresholds (MATCH {C.MATCH_THRESHOLD}, REVIEW {C.REVIEW_THRESHOLD}) precision "
-                     f"is {pct(cur['precision'])}, recall {pct(cur['recall'])} and the manual review rate "
-                     f"{pct(cur['review_rate'])}."]
-        return {"analysis": notes, "observation": f"Rule-based assessment: {rates[part]}.",
-                "recommendation": "" if rates[part] == SAT else NOT_ASSESSED, "rating": rates[part]}
-    if part == "data_quality_conclusion":
-        return ev["notes"]["Data quality"]["Observation"]
+        v = value if isinstance(value, dict) else {"observation": text(value)}
+        analysis = v.get("analysis") if isinstance(v.get("analysis"), list) else [text(v.get("analysis"))]
+        return {"analysis": [text(a) for a in analysis if text(a)], "observation": text(v.get("observation")),
+                "recommendation": text(v.get("recommendation"))}
     if part in ("documentation_review", "data_quality_rows"):
-        areas = DOC_AREAS if part == "documentation_review" else DQ_AREAS
-        return [{"area": a, "observation": NOT_ASSESSED, "recommendation": "-"} for a in areas]
+        rows = value if isinstance(value, list) else []
+        return [{k: text(r.get(k)) for k in ("area", "observation", "recommendation")}
+                for r in rows if isinstance(r, dict)]
     if part in QUAL_SECTIONS:
-        return {"assessment": NOT_ASSESSED, "observation": "-", "recommendation": "-"}
-    overall = overall_rating(ev, rates)
-    needs = [_cap(QUANT_SECTIONS.get(k, k.replace("_", " "))) for k, v in rates.items() if v == NEEDS]
-    text = (f"The overall rating is {overall}. Areas rated Needs attention: {', '.join(needs) or 'none'}.")
-    return {"qualitative_assessment": NOT_ASSESSED, "quantitative_assessment": text, "conclusion": text,
-            "validation_summary": [text], "overall_rating": overall}[part]
+        v = value if isinstance(value, dict) else {"assessment": text(value)}
+        return {k: text(v.get(k)) for k in ("assessment", "observation", "recommendation")}
+    if part == "validation_summary":
+        return [text(p) for p in (value if isinstance(value, list) else [value]) if text(p)]
+    return text(value)
 
 
 # ==================================================================
 # Report generation
 # ==================================================================
 
+VERIFIED, CHECKS_NOT_PASSED = "AI text verified", "AI text - checks not passed"
+UNVERIFIED_NOTE = ("Note: this AI-written text did not pass every automatic check after the correction rounds; "
+                   "the problems are listed in Annexure B.")
+
+
 def generate_texts(ev, ask, on_step=None):
     """Run the AI calls in order; returns (texts per report part group, generation log)."""
     rates = ratings(ev)
     overall = overall_rating(ev, rates)
-    texts = {"quant_a": {}, "quant_b": {}, "qual_a": {}, "qual_b": {}, "summary": {}}
+    texts = {"quant_a": {}, "quant_b": {}, "qual_a": {}, "qual_b": {}, "summary": {}, "unverified": set()}
     log, all_numbers = [], set()
     for n, (call, label, pack, parts, store) in enumerate(CALLS, 1):
         previous = None
@@ -627,11 +627,16 @@ def generate_texts(ev, ask, on_step=None):
         answer, model, revisions, problems = ask(
             call, evidence, lambda a, p=parts, e=evidence, x=extra: check_answer(p, a, e, rates, overall, x))
         answer = answer or {}
+        missing = [p for p in parts if p not in answer]
+        if missing:
+            raise RuntimeError(f"The AI did not write {', '.join(missing)}. Please try again.")
         for part in parts:
-            failed = part in problems or part not in answer
-            texts[store][part] = fallback(part, ev, rates) if failed else answer[part]
+            failed = part in problems
+            texts[store][part] = _shape(part, answer[part])
+            if failed:
+                texts["unverified"].add(part)
             log.append({"part": f"{label} - {part.replace('_', ' ')}", "model": model or "-",
-                        "revisions": revisions, "result": "Rule-based text used" if failed else "AI text verified",
+                        "revisions": revisions, "result": CHECKS_NOT_PASSED if failed else VERIFIED,
                         "problems": "; ".join(problems.get(part, [])) if failed else ""})
     return texts, log
 
@@ -644,8 +649,8 @@ def build_report(results, benchmark, master_df, master, ask=None, period=None, o
     models = sorted({row["model"] for row in log if row["model"] != "-"})
     meta = {"title": C.REPORT_TITLE, "organisation": C.REPORT_ORGANISATION, "validator": C.REPORT_VALIDATOR,
             "period": ev["ctx"]["period"], "generated_at": datetime.now().strftime("%d %B %Y, %H:%M"),
-            "model": model_label or ", ".join(models) or "-", "overall_rating": texts["summary"]["overall_rating"],
-            "ai_parts": sum(r["result"] == "AI text verified" for r in log), "parts": len(log)}
+            "model": model_label or ", ".join(models) or "-", "overall_rating": overall_rating(ev, rates),
+            "ai_parts": sum(r["result"] == VERIFIED for r in log), "parts": len(log)}
     return {"blocks": assemble(ev, texts, rates, log, meta), "meta": meta, "log": log}
 
 
@@ -700,17 +705,25 @@ def _df_table(caption, df, columns, labels=None, count_cols=()):
     return Table(caption, [labels.get(c, V.REPORT_LABELS.get(c, c)) for c in columns], rows)
 
 
-def _quant_result(part, t):
-    blocks = [Label("Analysis"), Numbered(t["analysis"]), Label("Assessment"), Rating(t["rating"]),
+def Note(text):
+    return {"type": "note", "text": text}
+
+
+def _flag(part, unverified):
+    return [Note(UNVERIFIED_NOTE)] if part in unverified else []
+
+
+def _quant_result(part, t, rating, unverified):
+    blocks = [Label("Analysis"), Numbered(t["analysis"]), Label("Assessment"), Rating(rating),
               Label("Observation"), Para(t["observation"])]
     if (t.get("recommendation") or "").strip() and t["recommendation"] != "-":
         blocks += [Label("Recommendation"), Para(t["recommendation"])]
-    return blocks
+    return blocks + _flag(part, unverified)
 
 
-def _qual_result(t):
+def _qual_result(part, t, unverified):
     return [Para(t["assessment"]), Label("Observation"), Para(t["observation"]), Label("Recommendation"),
-            Para(t["recommendation"])]
+            Para(t["recommendation"])] + _flag(part, unverified)
 
 
 def _rows_table(caption, rows):
@@ -720,6 +733,8 @@ def _rows_table(caption, rows):
 
 def assemble(ev, texts, rates, log, meta):
     qa, qb, la, lb, sm = (texts[g] for g in ("quant_a", "quant_b", "qual_a", "qual_b", "summary"))
+    un = texts.get("unverified", set())
+    overall = meta["overall_rating"]
     o = ev["overall"]
     periods = ev["periods"]
     n_periods, n_records = len(periods), o["records"]
@@ -767,9 +782,10 @@ def assemble(ev, texts, rates, log, meta):
                f"candidate is at least {C.SCORE_GAP_THRESHOLD}; scores from {C.REVIEW_THRESHOLD} to "
                f"{C.MATCH_THRESHOLD}, small score gaps and conflicts go to MANUAL REVIEW; lower scores create a new "
                "subject (NO MATCH)."),
-          H(2, "Validation Outcome"), Label("Overall assessment"), Rating(sm["overall_rating"]), Para(sm["conclusion"]),
-          Label("Qualitative assessment"), Para(sm["qualitative_assessment"]),
-          Label("Quantitative assessment"), Para(sm["quantitative_assessment"]),
+          H(2, "Validation Outcome"), Label("Overall assessment"), Rating(overall), Para(sm["conclusion"]),
+          *_flag("conclusion", un),
+          Label("Qualitative assessment"), Para(sm["qualitative_assessment"]), *_flag("qualitative_assessment", un),
+          Label("Quantitative assessment"), Para(sm["quantitative_assessment"]), *_flag("quantitative_assessment", un),
           Table("Summary of quantitative assessments", ["Area", "Assessment"],
                 [[_cap(QUANT_SECTIONS[k]), rates[k]] for k in QUANT_SECTIONS]
                 + [["Data quality", rates["data_quality"]]]),
@@ -819,6 +835,7 @@ def assemble(ev, texts, rates, log, meta):
           Para("The documentation was reviewed for its adequacy to allow independent understanding, validation, "
                "replication and monitoring of the model. The observations and recommendations are summarised below."),
           _rows_table("Model documentation: observations and recommendations", la["documentation_review"]),
+          *_flag("documentation_review", un),
           H(2, "Purpose, Scope and Uses"),
           Para("The purpose of the S&M model is to identify and link records that belong to the same person, using "
                f"the attributes {field_list}. It prevents duplicate subjects and ensures that information about a "
@@ -840,7 +857,9 @@ def assemble(ev, texts, rates, log, meta):
               ["Subject repository", f"{num(ev['master_count'])} master person records", "Master repository"]]),
           _df_table("Completeness and validity of the matching attributes", ev["quality"], list(ev["quality"].columns)),
           Label("Assessment"), Rating(rates["data_quality"]), Para(la["data_quality_conclusion"]),
+          *_flag("data_quality_conclusion", un),
           _rows_table("Data quality and controls: observations and recommendations", la["data_quality_rows"]),
+          *_flag("data_quality_rows", un),
           H(2, "Model Design"),
           Para("The model is a rule-based search, match and decision framework applied uniformly to every incoming "
                "record. Each attribute has its own comparison method, and a record is only merged automatically when "
@@ -855,14 +874,14 @@ def assemble(ev, texts, rates, log, meta):
                     "the record is matched, sent to manual review, or created as a new subject."]),
           Table("Key input attributes and matching methods",
                 ["Attribute", "Method", "Weight", "Agreement threshold", "Max. edit distance"], method_rows),
-          *_qual_result(lb["design_framework"]),
+          *_qual_result("design_framework", lb["design_framework"], un),
           H(3, "Match Score Construction"),
           Para("A field agrees when its similarity reaches the agreement threshold or its edit distance is within the "
                "maximum; otherwise its score is 0. The Soc. Sec. ID is compared digit by digit ("
                + ", ".join(f"{k} edit(s) = {v}" for k, v in C.ID_SCORE_BY_DIGIT_EDITS.items())
                + "). The match score is the weighted average of the available field scores; missing fields are left "
                "out and the remaining weights re-scaled."),
-          *_qual_result(lb["score_construction"]),
+          *_qual_result("score_construction", lb["score_construction"], un),
           H(3, "Matching Threshold and Decision Logic"),
           Table("Decision rules", ["Decision", "Rule"], [
               ["MATCH", f"Score >= {C.MATCH_THRESHOLD}, no conflict and score gap >= {C.SCORE_GAP_THRESHOLD}"],
@@ -870,30 +889,30 @@ def assemble(ev, texts, rates, log, meta):
                                 f"any conflict, or compared fields < {100 * C.MIN_EVIDENCE_WEIGHT:g}% of the weight"],
               ["NO MATCH", f"Score < {C.REVIEW_THRESHOLD} or no candidate"]]),
           Para("Conflicts: " + "; ".join(ev["methodology"]["conflict_rules"]) + "."),
-          *_qual_result(lb["thresholds"]),
+          *_qual_result("thresholds", lb["thresholds"], un),
           H(2, "Algorithm and Rule Review"),
           Para("Production methods: " + "; ".join(f"{C.FIELD_LABELS[f]} - {cfg['method']}"
                                                    for f, cfg in C.FIELD_CONFIG.items())
                + ". Challenger algorithms, each replacing one production comparator: "
                + "; ".join(f"{k} (cut-off {v})" for k, v in C.CHALLENGER_CUTOFFS.items()) + "."),
-          *_qual_result(lb["algorithms"]),
+          *_qual_result("algorithms", lb["algorithms"], un),
           H(2, "Dispute and Error Analysis Framework"),
           Para("Disputes are categorised as 'does not belong to me' (an incorrect merge) and 'I already have an "
                "account' (a missed duplicate). Exceptions - missed matches, wrong merges and manual reviews - are "
                "assigned a primary root cause and grouped by the attributes that differ from the true record."),
-          *_qual_result(lb["dispute_framework"]),
+          *_qual_result("dispute_framework", lb["dispute_framework"], un),
           H(2, "Model Governance and Change Management Review"),
           Table("Change log", ["Version", "Date", "Change", "Impact assessed", "Approved by"],
                 [[c["version"], c["date"], c["change"], "Yes" if c["impact_assessed"] else "No",
                   c["approved_by"] or "Not recorded"] for c in ev["change"]["change_log"]]),
-          *_qual_result(lb["governance"]),
+          *_qual_result("governance", lb["governance"], un),
           H(2, "Model Monitoring Review"),
           Table("KPI limits used for monitoring", ["KPI", "Better when", "Green", "Amber"],
                 [[P.KPI_DICTIONARY[k]["label"], t["direction"],
                   f"{'>=' if t['direction'] == 'higher' else '<='} {pct(t['green'])}",
                   f"{'>=' if t['direction'] == 'higher' else '<='} {pct(t['amber'])}"]
                  for k, t in C.KPI_THRESHOLDS.items()]),
-          *_qual_result(lb["monitoring"]),
+          *_qual_result("monitoring", lb["monitoring"], un),
           {"type": "pagebreak"}]
 
     # ---------------- 5 Quantitative validation ----------------
@@ -980,16 +999,17 @@ def assemble(ev, texts, rates, log, meta):
         if part == "performance":
             b.append({"type": "chart", "caption": "Hit rate, dispute rate and Type II error by period",
                       "data": periods[["period", "hit_rate", "dispute_rate", "type2_error"]]})
-        b += _quant_result(part, all_q[part])
+        b += _quant_result(part, all_q[part], rates[part], un)
     b.append({"type": "pagebreak"})
 
     # ---------------- 6 Validation summary ----------------
-    summary_rows = [[_cap(QUANT_SECTIONS[k]), all_q[k]["rating"],
+    summary_rows = [[_cap(QUANT_SECTIONS[k]), rates[k],
                      all_q[k]["recommendation"] if (all_q[k].get("recommendation") or "-") != "-" else "-"]
                     for k in QUANT_SECTIONS]
     summary_rows += [[_cap(QUAL_SECTIONS[k]), "-", lb[k]["recommendation"]] for k in QUAL_SECTIONS]
-    b += [H(1, "Validation Summary")] + [Para(p) for p in sm["validation_summary"]] + [
-        Label("Overall rating"), Rating(sm["overall_rating"]),
+    b += [H(1, "Validation Summary")] + [Para(p) for p in sm["validation_summary"]] + _flag(
+        "validation_summary", un) + [
+        Label("Overall rating"), Rating(overall),
         Table("Summary of assessments and recommendations", ["Area", "Assessment", "Recommendation"], summary_rows),
         Label("Assumptions"), Bullets(ASSUMPTIONS), Label("Limitations"), Bullets(LIMITATIONS),
         {"type": "pagebreak"}]
@@ -1000,9 +1020,9 @@ def assemble(ev, texts, rates, log, meta):
           {"type": "signoff"}, {"type": "pagebreak"},
           H(0, "Annexure A: Formulae"), Table("Formulae", ["Metric", "Formula"], FORMULAS),
           H(0, "Annexure B: AI Generation and Verification Log"),
-          Para(f"{meta['ai_parts']} of {meta['parts']} report parts were written by the AI agent and passed every "
-               "automatic check. Parts that failed were replaced by rule-based text. Tables, figures and ratings are "
-               "always produced by code."),
+          Para(f"All {meta['parts']} text parts were written by the AI agent; {meta['ai_parts']} passed every "
+               "automatic check. Parts that still failed after the correction rounds are marked in the report. "
+               "Tables, figures and ratings are always produced by code."),
           Table("AI generation and verification log", ["Report part", "Model", "Revisions", "Result", "Problems"],
                 [[r["part"], r["model"], r["revisions"], r["result"], r["problems"] or "-"] for r in log])]
     return b

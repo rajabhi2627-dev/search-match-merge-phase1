@@ -94,13 +94,24 @@ def test_correct_answers_pass_every_check(data):
     assert report["meta"]["ai_parts"] == report["meta"]["parts"] == len(report["log"])
 
 
-def test_mistakes_are_caught_and_replaced(data):
+def test_mistakes_are_caught_and_marked(data):
     report = R.build_report(*data, ask=bad_ask)
-    failed = {row["part"].split(" - ")[-1] for row in report["log"] if row["result"] != "AI text verified"}
+    failed = {row["part"].split(" - ")[-1] for row in report["log"] if row["result"] == R.CHECKS_NOT_PASSED}
     assert failed == {"performance", "challenger", "documentation review", "governance"}
-    body = [b for b in report["blocks"] if b.get("caption") != "AI generation and verification log"]
-    text = json.dumps(body, default=str)  # the log in Annexure B quotes the rejected text on purpose
-    assert "77.7%" not in text and "See Table 3" not in text
+    notes = [b for b in report["blocks"] if b["type"] == "note"]
+    assert len(notes) == 4                                   # every failed part is marked in the report
+    ratings = [b["text"] for b in report["blocks"] if b["type"] == "rating"]
+    ev = R.collect(*data)
+    rates = R.ratings(ev)
+    overall_badges = 2 * (R.overall_rating(ev, rates) == R.NEEDS)  # executive summary + validation summary
+    assert ratings.count(R.NEEDS) == sum(v == R.NEEDS for v in rates.values()) + overall_badges  # from the rules
+
+
+def test_no_answer_stops_the_report(data):
+    def silent(call, evidence, check):
+        raise RuntimeError("Groq did not return an answer")
+    with pytest.raises(RuntimeError):
+        R.build_report(*data, ask=silent)
 
 
 def test_ratings_come_from_rules(data):

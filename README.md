@@ -234,8 +234,8 @@ Validation (data overview, hit and dispute rates, search paths, challengers, Typ
 threshold calibration), Validation Summary, sign-off and annexures - downloadable as PDF (`report_pdf.py`) and Word
 (`report_docx.py`). Tables, figures, the model description and every rating come from code; the agent writes the
 analysis, observations and recommendations in eight small verified parts (numbers traced to the evidence, ratings equal
-to the rule-based ratings, fixed review areas present). A part that fails twice is replaced by rule-based text and
-listed in Annexure B. The validator records the decision on the same tab, and the downloads then include it.
+to the rule-based ratings, fixed review areas present). All text is written by the AI: a part that fails gets up to
+3 correction rounds; if it still fails, the AI text is kept, marked in the report and listed in Annexure B. The validator records the decision on the same tab, and the downloads then include it.
 Organisation and validator names are set in `config.py` (`REPORT_ORGANISATION`, `REPORT_VALIDATOR`).
 
 **Validation of the agent** (`agent_validation.py`): 13 golden scenarios (baseline, all Green, dispute and hit
@@ -303,5 +303,5 @@ search_match_project/
 
 **Groq token limits.** Every request is sized so that prompt + reserved answer stay below the tokens-per-minute
 limit (8,000 on the free tier) with headroom; a "request too large" reply shrinks the answer budget and retries.
-The full report is written in eight small parts with word limits, a revision resends only the failed parts, and a
-part that still cannot be written is filled with rule-based text, so the report always completes.
+The full report is written in eight small parts with word limits, a revision resends only the failed parts, and when
+Groq is busy the call waits and retries. All report text is written by the AI.

@@ -186,7 +186,7 @@ AGENT_STABILITY_RUNS = 3         # repeated runs per stability scenario
 REPORT_TITLE = "Search and Match Model Validation Report"
 REPORT_ORGANISATION = "Credit Information Company"            # owner of the Search & Match model
 REPORT_VALIDATOR = "Independent Model Validation Function"    # who performs the validation
-REPORT_SECTION_REVISIONS = 1     # AI self-corrections per report part when a check fails
+REPORT_SECTION_REVISIONS = 3     # AI correction rounds per report part when a check fails
 
 ANOMALY_CHANGE_PP = 5.0         # month-on-month KPI change (percentage points) flagged as an anomaly
 TREND_PERIODS = 3                # consecutive deteriorations that count as an adverse trend

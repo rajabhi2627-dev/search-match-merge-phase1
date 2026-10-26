@@ -811,8 +811,8 @@ def full_report_panel(master_df, master, has_key):
     c3.metric("Model", meta["model"].split("/")[-1])
     failed = [r for r in report["log"] if r["result"] != "AI text verified"]
     if failed:
-        st.warning(f"{len(failed)} part(s) failed the automatic checks and use rule-based text instead; they are "
-                   "listed in Annexure B of the report.")
+        st.warning(f"{len(failed)} AI-written part(s) did not pass every automatic check after the correction "
+                   "rounds; they are marked in the report and listed in Annexure B.")
     pdf, docx_bytes = full_report_files(report)
     name = f"search_match_validation_report_{meta['period']}"
     d1, d2 = st.columns(2)

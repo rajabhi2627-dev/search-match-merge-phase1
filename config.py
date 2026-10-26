@@ -85,6 +85,19 @@ MATCH_THRESHOLD = 85
 REVIEW_THRESHOLD = 65
 SCORE_GAP_THRESHOLD = 5
 
+# Strong corroboration (added after the validation found that most missed matches had ONE strong identifier
+# completely different - a changed surname or a mistyped Soc. Sec. ID - while everything else agreed, which caps the
+# score just below REVIEW_THRESHOLD). A best candidate below the review threshold goes to MANUAL REVIEW (never to an
+# automatic MATCH) when: name or Soc. Sec. ID scores >= CORROBORATION_STRONG_SCORE, the date of birth is identical,
+# and the address or the city agrees. Requiring the exact date of birth keeps look-alike relatives and shared IDs out.
+CORROBORATION_REVIEW = True
+CORROBORATION_STRONG_SCORE = 90
+
+# Look-alike guard (added after the validation traced every incorrect merge to look-alike relatives: same name and
+# address, Soc. Sec. ID one digit different, date of birth missing). A near-identical but not exact ID with no date
+# of birth to confirm it is a conflict, so the record goes to MANUAL REVIEW instead of an automatic MATCH.
+LOOKALIKE_GUARD = True
+
 MATCH = "MATCH"
 MANUAL_REVIEW = "MANUAL REVIEW"
 NO_MATCH = "NO MATCH"
@@ -217,6 +230,10 @@ CHANGE_LOG = [
      "impact_assessed": True, "approved_by": None},
     {"version": "2.3", "date": "2026-10-16",
      "change": "Hit rate, dispute rate, incorrect merge rate and Type I/II errors use the validation-report formulas",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.4", "date": "2026-10-26",
+     "change": "Strong-corroboration review rule and look-alike guard (validation sample: Type II error 11.1% to "
+               "1.3%, incorrect merges 5 to 0, manual review rate 6.0% to 14.2%)",
      "impact_assessed": True, "approved_by": None},
 ]
 

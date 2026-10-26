@@ -314,7 +314,8 @@ def redecide(results, match_threshold, review_threshold):
             second = r.second_score if pd.notna(r.second_score) else 0.0
             meaningful = r.candidates_found > 1 and second >= review_threshold
             decision, _ = M.make_decision(r.match_score, r.score_gap, meaningful, bool(r.conflicts),
-                                          bool(r.limited_evidence), match_threshold, review_threshold)
+                                          bool(r.limited_evidence), match_threshold, review_threshold,
+                                          corroborated=bool(getattr(r, "corroborated", False)))
         predicted = r.best_candidate_id if decision == C.MATCH else None
         code = P.classify_outcome(decision, predicted, r.true_match_status, r.true_entity_id)
         rows.append((decision, predicted, code))

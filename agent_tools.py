@@ -66,7 +66,12 @@ def get_methodology(ctx):
                            "min_evidence_weight_pct": round(100 * C.MIN_EVIDENCE_WEIGHT, 1)},
         "conflict_rules": ["Name or Soc. Sec. ID clearly agrees while the other clearly disagrees",
                            "Date of birth differs", "Exact Soc. Sec. ID points to another entity than the best score",
-                           "Too little evidence"],
+                           "Too little evidence",
+                           "Soc. Sec. ID close but not identical with no date of birth to confirm it (possible "
+                           "relative)"],
+        "strong_corroboration": f"score below {C.REVIEW_THRESHOLD} but name or Soc. Sec. ID >= "
+                                f"{C.CORROBORATION_STRONG_SCORE}, identical date of birth and address or city "
+                                "agreeing -> MANUAL REVIEW",
         "dataset": f"{C.DATASET_NAME} public benchmark; {C.MASTER_RECORD_COUNT} master records",
     }
 

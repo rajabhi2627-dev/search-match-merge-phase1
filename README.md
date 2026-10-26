@@ -123,6 +123,7 @@ Name 35%, Soc. Sec. ID 35%, Address 15%, DOB 7.5%, City 7.5% (total 100%).
 2. Date of birth present on both sides and different.
 3. The Soc. Sec. ID matches one entity exactly, but the best overall score belongs to another entity.
 4. Too little evidence (compared fields < 70% of the total weight).
+5. Look-alike guard: Soc. Sec. ID close but not identical and no date of birth to confirm it (possible relative).
 
 **Score gap** = best score − second-best score. A gap < 5 → MANUAL REVIEW, unless there is no meaningful
 second candidate (none, or its score < 65).
@@ -131,7 +132,13 @@ second candidate (none, or its score < 65).
 |---|---|
 | MATCH | score ≥ 85, no conflict, score gap ≥ 5 |
 | MANUAL REVIEW | score 65–85, or score gap < 5, or any conflict |
-| NO MATCH | score < 65 (or no candidate) |
+| NO MATCH | score < 65 (or no candidate), unless strongly corroborated |
+
+**Strong corroboration:** a best candidate below 65 goes to MANUAL REVIEW (never to MATCH) when the name or the
+Soc. Sec. ID scores ≥ 90, the date of birth is identical, and the address or the city agrees. The validation showed
+that almost every missed match had one strong identifier completely different (a changed surname or a mistyped ID)
+while everything else agreed. Effect on the validation sample (6 months, 600 records): Type II error 11.1% → 1.3%,
+recall 87.9% → 98.4%, incorrect merges 5 → 0 (with the look-alike guard), manual review rate 6.0% → 14.2%.
 
 All values are in `config.py`.
 
@@ -185,8 +192,8 @@ whose person exists in the master.
   receives the cleanest records, the last month the most corrupted.
 - **Hard cases (not in FEBRL):** from February a few new-person records are replaced by *look-alike relatives*
   (same name and address as an existing customer, DOB missing, Soc. Sec. ID 1 digit different) and *shared IDs*
-  (a new person entered with an existing customer's ID). Look-alikes are wrongly merged, which produces
-  realistic incorrect merges and disputes; shared IDs are stopped by the conflict rules.
+  (a new person entered with an existing customer's ID). Since version 2.4 look-alikes are stopped by
+  the look-alike guard (manual review) and shared IDs by the other conflict rules.
 - **Disputes (simulated, fixed seed):** 80% of wrong merges lead to a "does not belong to me" dispute (counted
   in the dispute rate); 50% of missed duplicates lead to an "I already have an account" complaint (shown separately).
 - **Observations:** rule-based – every KPI that is not Green in the latest month, or moved by ≥ 2 percentage

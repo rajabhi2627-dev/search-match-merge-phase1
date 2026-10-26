@@ -292,7 +292,8 @@ def evidence_for(group, ev, rates, previous=None):
         m = ev["methodology"]
         change = ev["change"]
         return {**common,
-                "methodology": {k: m[k] for k in ("fields", "search_rules", "decision_rules", "conflict_rules")},
+                "methodology": {k: m[k] for k in ("fields", "search_rules", "decision_rules", "conflict_rules",
+                                                  "strong_corroboration")},
                 "basis_of_weights_and_thresholds": "expert judgement, checked with threshold calibration on the "
                                                    "validation sample; no empirical optimisation is documented",
                 "challenger_cutoffs": C.CHALLENGER_CUTOFFS,
@@ -890,7 +891,8 @@ def assemble(ev, texts, rates, log, meta):
               ["MATCH", f"Score >= {C.MATCH_THRESHOLD}, no conflict and score gap >= {C.SCORE_GAP_THRESHOLD}"],
               ["MANUAL REVIEW", f"Score {C.REVIEW_THRESHOLD}-{C.MATCH_THRESHOLD}, score gap < {C.SCORE_GAP_THRESHOLD}, "
                                 f"any conflict, or compared fields < {100 * C.MIN_EVIDENCE_WEIGHT:g}% of the weight"],
-              ["NO MATCH", f"Score < {C.REVIEW_THRESHOLD} or no candidate"]]),
+              ["NO MATCH", f"Score < {C.REVIEW_THRESHOLD} or no candidate, unless strongly corroborated"]]),
+          Para("Strong corroboration: " + ev["methodology"]["strong_corroboration"] + "."),
           Para("Conflicts: " + "; ".join(ev["methodology"]["conflict_rules"]) + "."),
           *_qual_result("thresholds", lb["thresholds"], un),
           H(2, "Algorithm and Rule Review"),

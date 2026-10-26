@@ -258,6 +258,7 @@ def candidate_conflicts(field_scores):
     Rule 1: one strong identifier (name / Soc. Sec. ID) clearly agrees (>= 90)
             while the other clearly disagrees (< 50).
     Rule 2: date of birth present on both sides but different.
+    Rule 4 (look-alike guard): Soc. Sec. ID similar but not identical, and no date of birth to confirm it.
     """
     conflicts = []
     strong = {f: field_scores[f] for f in C.STRONG_FIELDS if field_scores[f] is not None}
@@ -272,6 +273,10 @@ def candidate_conflicts(field_scores):
         )
     if field_scores["date_of_birth"] == 0:
         conflicts.append("Date of birth is different")
+    id_score = field_scores["soc_sec_id"]
+    if C.LOOKALIKE_GUARD and id_score is not None and 0 < id_score < 100 and field_scores["date_of_birth"] is None:
+        conflicts.append("Soc. Sec. ID is close but not identical and there is no date of birth to confirm it "
+                         "(possible relative)")
     return conflicts
 
 
@@ -307,11 +312,22 @@ def cross_candidate_conflicts(scored):
 # 6. DECISION
 # ==================================================================
 
+def strong_corroboration(field_scores):
+    """True when a low-scoring candidate is still strongly corroborated (see CORROBORATION_* in config.py):
+    name or Soc. Sec. ID clearly agrees, the date of birth is identical, and the address or the city agrees."""
+    if not C.CORROBORATION_REVIEW:
+        return False
+    strong = any((field_scores.get(f) or 0) >= C.CORROBORATION_STRONG_SCORE for f in C.STRONG_FIELDS)
+    same_dob = field_scores.get("date_of_birth") == 100
+    location = any((field_scores.get(f) or 0) > 0 for f in ("address", "city"))
+    return strong and same_dob and location
+
+
 def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limited_evidence,
-                  match_threshold=C.MATCH_THRESHOLD, review_threshold=C.REVIEW_THRESHOLD):
+                  match_threshold=C.MATCH_THRESHOLD, review_threshold=C.REVIEW_THRESHOLD, corroborated=False):
     """Return (decision, [reasons]).
 
-    NO MATCH       : best score < review_threshold
+    NO MATCH       : best score < review_threshold, unless the candidate is strongly corroborated (-> MANUAL REVIEW)
     MANUAL REVIEW  : score in [review, match) OR gap < SCORE_GAP_THRESHOLD (with a meaningful
                      second candidate) OR a conflict OR too little evidence
     MATCH          : score >= match_threshold and none of the review reasons apply
@@ -319,6 +335,10 @@ def make_decision(best_score, score_gap, has_meaningful_second, conflicts, limit
     The thresholds can be overridden for threshold calibration on the Validation page.
     """
     if best_score < review_threshold:
+        if corroborated:
+            return C.MANUAL_REVIEW, [f"Best score {best_score:.1f} is below the review threshold ({review_threshold}), "
+                                     "but the candidate is strongly corroborated (name or ID, same date of birth and "
+                                     "address or city) - possible changed name or mistyped ID"]
         return C.NO_MATCH, [f"Best score {best_score:.1f} is below the review threshold ({review_threshold})"]
     reasons = []
     if best_score < match_threshold:
@@ -362,6 +382,7 @@ def match_record(raw_input, master, comparators=None):
         "score_gap": None,
         "conflicts": [],
         "limited_evidence": False,
+        "corroborated": False,
         "decision": C.NO_MATCH,
         "decision_reasons": ["No candidate satisfied any search rule"],
         "predicted_entity_id": None,
@@ -376,13 +397,16 @@ def match_record(raw_input, master, comparators=None):
     conflicts = best["conflicts"] + cross_candidate_conflicts(scored)
     limited_evidence = best["evidence_weight"] < C.MIN_EVIDENCE_WEIGHT
 
-    decision, reasons = make_decision(best["overall"], score_gap, has_meaningful_second, conflicts, limited_evidence)
+    corroborated = strong_corroboration(best["field_scores"])
+    decision, reasons = make_decision(best["overall"], score_gap, has_meaningful_second, conflicts, limited_evidence,
+                                      corroborated=corroborated)
 
     result.update(
         second_score=second_score,
         score_gap=score_gap,
         conflicts=conflicts,
         limited_evidence=limited_evidence,
+        corroborated=corroborated,
         decision=decision,
         decision_reasons=reasons,
         predicted_entity_id=best["entity_id"] if decision == C.MATCH else None,

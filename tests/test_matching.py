@@ -211,3 +211,32 @@ def test_wrong_entity_match_is_false_positive():
     assert P.classify_outcome(C.MATCH, 10002, C.MATCH, 10001) == "FP"
     assert P.classify_outcome(C.MATCH, 10001, C.MATCH, 10001) == "TP"
     assert P.classify_outcome(C.MANUAL_REVIEW, None, C.MATCH, 10001) == "REVIEW"
+
+
+def _scores(**kw):
+    base = {"name": 100.0, "soc_sec_id": 100.0, "address": 100.0, "date_of_birth": 100.0, "city": 100.0}
+    return {**base, **kw}
+
+
+def test_strong_corroboration_sends_low_scores_to_review():
+    # Changed surname: name fails, but ID, date of birth and address agree -> review, not a new subject
+    assert M.strong_corroboration(_scores(name=0.0))
+    assert M.make_decision(62, 62, False, [], False, corroborated=True)[0] == C.MANUAL_REVIEW
+    assert M.make_decision(62, 62, False, [], False, corroborated=False)[0] == C.NO_MATCH
+    # Mistyped ID: name, date of birth and city agree
+    assert M.strong_corroboration(_scores(soc_sec_id=0.0, address=0.0))
+    # Not corroborated: date of birth missing or different, or neither strong identifier agrees
+    assert not M.strong_corroboration(_scores(name=0.0, date_of_birth=None))
+    assert not M.strong_corroboration(_scores(name=0.0, date_of_birth=0.0))
+    assert not M.strong_corroboration(_scores(name=0.0, soc_sec_id=0.0))
+    assert not M.strong_corroboration(_scores(name=0.0, address=0.0, city=0.0))
+
+
+def test_lookalike_guard_blocks_automatic_merge():
+    # Relative: same name and address, ID one digit different, no date of birth -> conflict -> manual review
+    conflicts = M.candidate_conflicts(_scores(soc_sec_id=90.0, date_of_birth=None))
+    assert any("possible relative" in c for c in conflicts)
+    assert M.make_decision(97, 30, False, conflicts, False)[0] == C.MANUAL_REVIEW
+    # Exact ID, or a date of birth that confirms the person: no look-alike conflict
+    assert not M.candidate_conflicts(_scores(date_of_birth=None))
+    assert not M.candidate_conflicts(_scores(soc_sec_id=90.0))

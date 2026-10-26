@@ -420,8 +420,11 @@ Candidates with an exact ID hit come first, then by name similarity; at most {C.
 | 2. Date of birth differs | DOB present on both sides and different | MANUAL REVIEW |
 | 3. Identifiers point to different people | exact Soc. Sec. ID → one entity, best overall score → another entity | MANUAL REVIEW |
 | 4. Too little evidence | compared fields carry < {C.MIN_EVIDENCE_WEIGHT:.0%} of the total weight | MATCH not allowed → MANUAL REVIEW |
+| 5. Possible relative (look-alike guard) | Soc. Sec. ID close but not identical, and no date of birth to confirm it | MANUAL REVIEW |
 
-Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below that the result is NO MATCH anyway.
+Conflicts only matter when the score is at least {C.REVIEW_THRESHOLD}; below that the result is NO MATCH, except for
+**strong corroboration**: name or Soc. Sec. ID ≥ {C.CORROBORATION_STRONG_SCORE}, identical date of birth, and the
+address or city agrees → MANUAL REVIEW (a changed surname or a mistyped ID), never an automatic MATCH.
 """)
 
     st.subheader("10-11. Candidate ranking and score gap")
@@ -795,8 +798,10 @@ def full_report_panel(master_df, master, has_key):
              "and ratings come from the coded validation; the agent writes the analysis, observations and "
              "recommendations in small parts, and every number it writes is checked against the evidence.")
     if st.button("Generate validation report", type="primary", disabled=not has_key):
-        if db.load_benchmark_results().empty:
-            with st.spinner("Running the coded validation first (about 20 seconds)..."):
+        stored = db.load_monitoring_results()
+        outdated = stored.empty or "corroborated" not in stored.columns  # results from before version 2.4
+        if outdated or db.load_benchmark_results().empty:
+            with st.spinner("Running the coded validation with the current matching rules (about 20 seconds)..."):
                 db.save_monitoring_results(P.run_monitoring(master))
                 db.save_benchmark_results(V.run_benchmark(master, db.load_monitoring_results()))
         generate_full_report(master_df, master)

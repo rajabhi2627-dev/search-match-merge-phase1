@@ -98,6 +98,7 @@ def run_test_matching(test_records, master, comparators=None):
             "score_gap": result["score_gap"],
             "evidence_weight": best["evidence_weight"] if best else 0.0,
             "limited_evidence": result["limited_evidence"],
+            "corroborated": result["corroborated"],
             "candidates_found": result["candidates_found"],
             "search_path": "; ".join(best["search_reasons"]) if best else "",
             "decision": result["decision"],

@@ -49,11 +49,18 @@ def test_evidence_fits_token_budget(setup):
     assert "information only" in evidence
 
 
+def _kpi(ctx, key):
+    """Level, trend and threshold figures of one KPI, read from the evidence (no hard-coded results)."""
+    level = next(k for k in T.check_thresholds(ctx)["kpis"] if k["kpi"] == key)["value_pct"]
+    trend = next(t for t in T.analyse_trends(ctx)["trends"] if t["kpi"] == key)
+    return level, trend
+
+
 def _good_submission(ctx, outputs):
     th = T.check_thresholds(ctx)
-    kpi = next(k for k in th["kpis"] if k["kpi"] == "recall")
+    level, trend = _kpi(ctx, "recall")
     report = "\n".join(f"## {i}. {s}\ntext" for i, s in enumerate(A.REPORT_SECTIONS, 1))
-    report += f"\nRecall is {kpi['value_pct']}% in {ctx['period']}, fell by 33.3 pp."
+    report += f"\nRecall is {level}% in {ctx['period']}, fell by {abs(trend['change_pp'])} pp."
     return {"report_markdown": report, "overall_status": th["overall_status"], "breaches": th["breaches"],
             "data_issues": []}
 
@@ -88,21 +95,30 @@ def _consistency(setup, sid, sentence, change=None):
 
 
 def test_kpi_value_pairing(setup):
-    assert _consistency(setup, "S01", "Recall is 66.7% and the Type\u202fII error rate is 28.0%.") == ([], [], [])
-    pairing, _, _ = _consistency(setup, "S01", "Recall is 28.0% in Jun-26.")
-    assert pairing  # 28.0% is the Type II error, not recall
+    ctx = _scenario(setup, "S01")["ctx"]
+    recall, _ = _kpi(ctx, "recall")
+    type2, _ = _kpi(ctx, "type2_error")
+    review, _ = _kpi(ctx, "review_rate")
+    assert _consistency(setup, "S01", f"Recall is {recall}% and the Type\u202fII error rate is {type2}%.") == ([], [], [])
+    pairing, _, _ = _consistency(setup, "S01", f"Recall is {review}% in Jun-26.")
+    assert pairing  # that value is the manual review rate, not recall
     pairing, _, _ = _consistency(setup, "S01", "Recall moved by 4.4 pp.")
     assert pairing
 
 
 def test_direction_matches_sign(setup):
     change = {"review_threshold": 60}
-    ok = "Lowering the REVIEW threshold to 60 would reduce the Type II error by 9.1 pp."
-    bad = "Lowering the REVIEW threshold to 60 is expected to increase the Type II error by 9.1 pp."
+    impact = T.review_change_management(_scenario(setup, "S12")["ctx"], review_threshold=60)
+    pp = impact["proposed_change"]["impact_pp"]["type2_error"]
+    assert pp < 0  # lowering the review threshold reduces missed matches
+    ok = f"Lowering the REVIEW threshold to 60 would reduce the Type II error by {abs(pp)} pp."
+    bad = f"Lowering the REVIEW threshold to 60 is expected to increase the Type II error by {abs(pp)} pp."
     assert _consistency(setup, "S12", ok, change)[1] == []
     assert _consistency(setup, "S12", bad, change)[1]
-    assert _consistency(setup, "S01", "Recall dropped 33.3 pp since Jan-26.")[1] == []
-    assert _consistency(setup, "S01", "Recall rose from 100.0% to 66.7%.")[1]
+    _, trend = _kpi(_scenario(setup, "S01")["ctx"], "recall")
+    assert trend["change_pp"] < 0
+    assert _consistency(setup, "S01", f"Recall dropped {abs(trend['change_pp'])} pp since Jan-26.")[1] == []
+    assert _consistency(setup, "S01", f"Recall rose from {trend['first_pct']}% to {trend['last_pct']}%.")[1]
 
 
 def test_percent_only_on_percentages(setup):

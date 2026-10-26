@@ -174,7 +174,7 @@ AGENT_TEMPERATURE = 0
 AGENT_MAX_STEPS = 8              # maximum LLM calls per run
 AGENT_MAX_OUTPUT_TOKENS = 6000
 AGENT_REPORT_MAX_WORDS = 1000    # length limit for the AI report
-AGENT_REPORT_MAX_WORDS_FREE_TIER = 500  # free tier: a revision (evidence + previous report) must still fit
+AGENT_REPORT_MAX_WORDS_FREE_TIER = 400  # free tier: a revision (evidence + previous report) must still fit
 FREE_TIER_TOKENS_PER_MINUTE = 8000
 # Groq tokens per minute per model (prompt + output). 8,000 = free tier; the Developer plan allows 250,000.
 # Override without changing code: set GROQ_TOKENS_PER_MINUTE in the Streamlit secrets or the environment.

@@ -684,11 +684,6 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
         st.caption("These are the formulas of the validation report; the Performance and Monitoring pages use "
                    "the same definitions.")
 
-    import agent as A
-    has_key = bool(A.get_api_key())
-    then_ai = st.checkbox("Then let the AI agent write the full validation report (PDF and Word)", value=has_key,
-                          disabled=not has_key,
-                          help=None if has_key else "Needs GROQ_API_KEY in the Streamlit secrets.")
     if st.button("Run Validation", type="primary"):
         with st.spinner("Running the validation sample and 5 challenger algorithms (about 20 seconds)..."):
             monitoring = P.run_monitoring(master)
@@ -698,8 +693,6 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
         if st.session_state.get("agent_run"):
             st.session_state["agent_run"].pop("_pdf", None)  # rebuild the PDF with the new results
         st.session_state.pop("full_report", None)            # the old report no longer matches the results
-        if then_ai and generate_full_report(master_df, master):
-            st.success("Validation report ready - download it in section 11 below.")
 
     results = db.load_monitoring_results()
     benchmark = db.load_benchmark_results()
@@ -791,14 +784,21 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
         show = st.success if note["Status"] == "Satisfactory" else st.warning
         show(f"**{note['Area']} - {note['Status']}:** {note['Observation']}")
 
-    st.subheader("11. Validation report (written by the AI agent)")
+    st.info("The full validation report (PDF and Word), written by the AI agent from these results, is on the "
+            "**AI Agent** page.")
+
+
+def full_report_panel(master_df, master, has_key):
+    """Generate, download and sign off the full validation report."""
     st.write("The AI agent writes a complete model validation report: background, executive summary, validation "
              "approach, qualitative validation, quantitative validation and validation summary. Tables, figures "
-             "and ratings come from the code above; the agent writes the analysis, observations and "
-             "recommendations, and every number it writes is checked against the evidence.")
-    if not has_key:
-        st.warning("No Groq API key found. Add GROQ_API_KEY to the Streamlit secrets to write the report.")
-    if st.button("Write validation report", disabled=not has_key):
+             "and ratings come from the coded validation; the agent writes the analysis, observations and "
+             "recommendations in small parts, and every number it writes is checked against the evidence.")
+    if st.button("Generate validation report", type="primary", disabled=not has_key):
+        if db.load_benchmark_results().empty:
+            with st.spinner("Running the coded validation first (about 20 seconds)..."):
+                db.save_monitoring_results(P.run_monitoring(master))
+                db.save_benchmark_results(V.run_benchmark(master, db.load_monitoring_results()))
         generate_full_report(master_df, master)
     report = st.session_state.get("full_report")
     if not report:
@@ -902,7 +902,10 @@ def page_agent(master):
                    "groq_api_key.txt) to run the agent.")
 
     results = db.load_monitoring_results()
-    tab_run, tab_gov = st.tabs(["Run the agent", "Governance"])
+    tab_report, tab_run, tab_gov = st.tabs(["Validation report", "Monthly monitoring report", "Governance"])
+
+    with tab_report:
+        full_report_panel(get_master()[0], master, has_key)
 
     with tab_run:
         if results.empty:
@@ -919,7 +922,7 @@ def page_agent(master):
                 rt = c2.number_input("Proposed REVIEW threshold", 40, 95, C.REVIEW_THRESHOLD)
                 change = {k: int(v) for k, v, cur in [("match_threshold", mt, C.MATCH_THRESHOLD),
                                                       ("review_threshold", rt, C.REVIEW_THRESHOLD)] if v != cur}
-            if st.button("Run AI Agent", type="primary", disabled=not has_key):
+            if st.button("Run monitoring agent", disabled=not has_key):
                 try:
                     with st.status("Agent running...", expanded=True) as status:
                         ctx = agent_context(results, master, period, proposed_change=change or None)

@@ -226,16 +226,16 @@ monitoring and validation).
 | Human in the loop | the validator approves, rejects or requests changes; decisions are stored |
 | PDF report | `report_pdf.py`: AI report + guardrail checks + all 10 coded validation sections + validator sign-off + agent trace |
 
-**Validation report written by the AI agent.** On the Validation page, tick *Then let the AI agent write the
-full validation report* before *Run Validation* (or use section 11 afterwards). `validation_report.py` produces a
+**Validation report written by the AI agent.** On the **AI Agent** page, *Validation report* tab, click
+*Generate validation report* (the coded validation runs first if needed). `validation_report.py` produces a
 complete model validation report - Background, Executive Summary, Validation Approach, Qualitative Validation
 (documentation, purpose, data quality, model design, algorithms, disputes, governance, monitoring), Quantitative
 Validation (data overview, hit and dispute rates, search paths, challengers, Type I/II errors, disputes, root causes,
 threshold calibration), Validation Summary, sign-off and annexures - downloadable as PDF (`report_pdf.py`) and Word
 (`report_docx.py`). Tables, figures, the model description and every rating come from code; the agent writes the
-analysis, observations and recommendations in five verified parts (numbers traced to the evidence, ratings equal
+analysis, observations and recommendations in eight small verified parts (numbers traced to the evidence, ratings equal
 to the rule-based ratings, fixed review areas present). A part that fails twice is replaced by rule-based text and
-listed in Annexure B. The validator records the decision on the same page, and the downloads then include it.
+listed in Annexure B. The validator records the decision on the same tab, and the downloads then include it.
 Organisation and validator names are set in `config.py` (`REPORT_ORGANISATION`, `REPORT_VALIDATOR`).
 
 **Validation of the agent** (`agent_validation.py`): 13 golden scenarios (baseline, all Green, dispute and hit
@@ -300,3 +300,8 @@ search_match_project/
 ├── data/agent_validation_results.csv  latest agent validation run
 └── tests/              test_matching.py, test_agent.py, test_report_pdf.py, test_validation_report.py (no LLM calls)
 ```
+
+**Groq token limits.** Every request is sized so that prompt + reserved answer stay below the tokens-per-minute
+limit (8,000 on the free tier) with headroom; a "request too large" reply shrinks the answer budget and retries.
+The full report is written in eight small parts with word limits, a revision resends only the failed parts, and a
+part that still cannot be written is filled with rule-based text, so the report always completes.

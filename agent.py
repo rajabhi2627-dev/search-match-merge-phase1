@@ -164,9 +164,10 @@ def estimate_prompt_tokens(messages, tools):
 
 TOO_LARGE = re.compile(r"Limit\s+(\d+),\s*Requested\s+(\d+)")
 MIN_OUTPUT_TOKENS = 700
+SAFETY_TOKENS = 300   # headroom below the Groq limit on top of the cautious estimate
 
 
-def _chat(client, messages, tools, models):
+def _chat(client, messages, tools, models, max_output=None):
     """One LLM call, preferring the main model (see _pick_model). Returns (response, model).
 
     Groq rejects a request (HTTP 413) when prompt + max_completion_tokens exceed the tokens-per-minute limit, so
@@ -179,7 +180,8 @@ def _chat(client, messages, tools, models):
         model, wait = _pick_model(models, time.time())
         if wait:
             time.sleep(min(wait, 60) + 0.5)
-        max_out = min(C.AGENT_MAX_OUTPUT_TOKENS, tpm - estimate_prompt_tokens(messages, tools)) - shrink
+        max_out = min(max_output or C.AGENT_MAX_OUTPUT_TOKENS,
+                      tpm - estimate_prompt_tokens(messages, tools) - SAFETY_TOKENS) - shrink
         if max_out < MIN_OUTPUT_TOKENS:
             raise RuntimeError(f"The request is too large for the Groq limit of {tpm:,} tokens per minute. Set a "
                                "higher GROQ_TOKENS_PER_MINUTE after upgrading the Groq plan, or try again.")
@@ -530,7 +532,7 @@ def run_agent(ctx, task=None, client=None, model=None, on_step=None):
             {"role": "user", "content": f"Task: {task}\nAssessed period: {ctx['period']}\n\nEVIDENCE PACK\n{evidence}"}]
     messages = list(base)
     tools = [T.TOOLS[name][1] for name in AGENT_TOOLS] + [SUBMIT_TOOL]
-    revisions, submission, verification = 0, None, None
+    revisions, submission, verification, rejected = 0, None, None, 0
 
     def log(step):
         step["step"] = len(trace) + 1
@@ -542,15 +544,26 @@ def run_agent(ctx, task=None, client=None, model=None, on_step=None):
     for _ in range(C.AGENT_MAX_STEPS):
         try:
             response, used = _chat(client, messages, tools, models)
-            if used not in used_models:
-                used_models.append(used)
+        except RuntimeError as e:
+            if submission is None:
+                raise
+            log({"type": "message", "detail": f"Revision skipped: {e}"})  # keep the report already submitted
+            break
         except groq.BadRequestError as e:
-            # The service rejects tool calls that break the schema; tell the agent and let it retry.
+            # The service rejects tool calls that break the schema or were cut off by the token limit.
+            # Usually an answer cut off by the token limit. Start again from the evidence (do not let the
+            # conversation grow, which would make the next request even larger) and stop after a few tries.
             detail = str(e)[:400]
             log({"type": "rejected", "detail": detail})
-            messages.append({"role": "user", "content": "Your last tool call was rejected: " + detail
-                             + " Call the tool again with arguments that match its schema."})
+            rejected += 1
+            if rejected >= 3:
+                break
+            messages = list(base) if submission is None else messages[:len(base) + 1]
+            messages.append({"role": "user", "content": "Your last answer was rejected (it may have been cut "
+                             "off). Keep the report shorter and call submit_report again."})
             continue
+        if used not in used_models:
+            used_models.append(used)
         msg = response.choices[0].message
         calls = msg.tool_calls or []
         if not calls:

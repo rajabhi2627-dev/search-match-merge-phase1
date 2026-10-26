@@ -27,49 +27,66 @@ def data():
     return results, benchmark, pd.DataFrame(records), master
 
 
-def _answer(group, evidence):
+def _answer(call, evidence):
     """What a well-behaved model would submit: correct ratings and only numbers from the evidence."""
     rates = evidence.get("rule_based_ratings", {})
-    if group in ("quant_a", "quant_b"):
-        if group == "quant_a":
-            first = evidence["performance_by_period"][0]
-            point = f"The hit rate was {first['hit_rate_pct']}% in {first['period']}."
+    answer = {}
+    for part in R.CALL_PARTS[call]:
+        if part in R.QUANT_SECTIONS:
+            point = "The analysis covers every period of the validation sample."
+            if "performance_by_period" in evidence:
+                first = evidence["performance_by_period"][0]
+                point = f"The hit rate was {first['hit_rate_pct']}% in {first['period']}."
+            answer[part] = {"analysis": [point, "The results are consistent across periods.", "No anomaly was found."],
+                            "observation": "The review indicates results in line with the rule-based assessment.",
+                            "recommendation": "The model owner may consider continued monitoring.",
+                            "rating": rates[part]}
+        elif part in ("documentation_review", "data_quality_rows"):
+            areas = R.DOC_AREAS if part == "documentation_review" else R.DQ_AREAS
+            answer[part] = [{"area": a, "observation": "Documented in the README.", "recommendation": "Keep it current."}
+                            for a in areas]
+        elif part in R.QUAL_SECTIONS:
+            answer[part] = {"assessment": "Reviewed.", "observation": "Documented.", "recommendation": "Keep it current."}
+        elif part == "validation_summary":
+            answer[part] = ["Work performed.", "Results."]
+        elif part == "overall_rating":
+            answer[part] = evidence["overall_rating"]
         else:
-            last = evidence["errors_by_period"][-1]
-            point = f"The Type II error rate was {last['type2_error_pct']}% in {last['period']}."
-        return {part: {"analysis": [point, "The results are consistent across periods.", "No anomaly was found."],
-                       "observation": "The review indicates results in line with the rule-based assessment.",
-                       "recommendation": "The model owner may consider continued monitoring.", "rating": rating}
-                for part, rating in rates.items()}
-    if group == "qual_a":
-        def rows(areas):
-            return [{"area": a, "observation": "Documented in the README.", "recommendation": "Keep it current."}
-                    for a in areas]
-        return {"documentation_review": rows(R.DOC_AREAS), "data_quality_rows": rows(R.DQ_AREAS),
-                "data_quality_conclusion": "Data quality is adequate."}
-    if group == "qual_b":
-        return {k: {"assessment": "Reviewed.", "observation": "Documented.", "recommendation": "Keep it current."}
-                for k in R.QUAL_SECTIONS}
-    return {"qualitative_assessment": "Sound.", "quantitative_assessment": "Mixed.", "conclusion": "See ratings.",
-            "validation_summary": ["Work performed.", "Results."], "overall_rating": evidence["overall_rating"]}
+            answer[part] = "Adequate."
+    return answer
 
 
-def good_ask(group, evidence, check):
-    answer = _answer(group, evidence)
+def good_ask(call, evidence, check):
+    answer = _answer(call, evidence)
     return answer, "test-model", 0, check(answer)
 
 
-def bad_ask(group, evidence, check):
-    answer = json.loads(json.dumps(_answer(group, evidence)))
-    if group == "quant_a":
+def bad_ask(call, evidence, check):
+    answer = json.loads(json.dumps(_answer(call, evidence)))
+    if call == "quant_a":
         answer["performance"]["observation"] = "The hit rate was 77.7%."                 # invented number
         part = "challenger"
         answer[part]["rating"] = R.NEEDS if answer[part]["rating"] == R.SAT else R.SAT   # wrong rating
-    if group == "qual_a":
+    if call == "qual_a1":
         answer["documentation_review"] = answer["documentation_review"][:2]              # missing areas
-    if group == "qual_b":
+    if call == "qual_b2":
         answer["governance"]["observation"] = "See Table 3."                             # table reference
     return answer, "test-model", 1, check(answer)
+
+
+def test_every_request_fits_the_free_tier(data):
+    """Prompt estimate + reserved answer tokens of every call must stay within 8,000 tokens."""
+    import agent as A
+    ev = R.collect(*data)
+    rates = R.ratings(ev)
+    previous = {"observations": {str(i): "x" * 400 for i in range(14)}}
+    for call, _, pack, parts, _ in R.CALLS:
+        evidence = R.evidence_for(pack, ev, rates, previous if pack == "summary" else None)
+        tool = {"type": "function", "function": {"name": "submit", "parameters": R.call_schema(parts)}}
+        user = R.call_instructions(parts) + json.dumps(A._compact(evidence), default=str, separators=(",", ":"))
+        prompt = A.estimate_prompt_tokens([{"role": "system", "content": R.SYSTEM_PROMPT},
+                                           {"role": "user", "content": user}], [tool])
+        assert prompt + R.REPORT_PART_MAX_OUTPUT <= 8000, (call, prompt)
 
 
 def test_correct_answers_pass_every_check(data):

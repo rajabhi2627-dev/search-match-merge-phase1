@@ -446,3 +446,195 @@ def build_validation_pdf(run, sections=None, generated_at=None):
         story += [Spacer(1, 18)] + trace
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return buffer.getvalue()
+
+
+# ==================================================================
+# Full validation report (validation_report.build_report) -> PDF
+# ==================================================================
+
+from reportlab.platypus import BaseDocTemplate, Frame, NextPageTemplate, PageTemplate  # noqa: E402
+from reportlab.platypus.tableofcontents import TableOfContents  # noqa: E402
+
+STATUS_COLORS.update({"Satisfactory with recommendations": colors.HexColor("#b26a00")})
+
+FULL = {
+    "cover_org": ParagraphStyle("cover_org", parent=S["body"], fontName="Helvetica-Bold", fontSize=13, leading=17,
+                                textColor=ACCENT, spaceAfter=40),
+    "cover_title": ParagraphStyle("cover_title", parent=S["title"], fontSize=26, leading=32, spaceAfter=10),
+    "h0": ParagraphStyle("h0", parent=S["part"], fontSize=15, leading=19, spaceBefore=0, spaceAfter=10),
+    "h1": ParagraphStyle("fh1", parent=S["part"], fontSize=15, leading=19, spaceBefore=4, spaceAfter=8),
+    "h2": ParagraphStyle("fh2", parent=S["h1"], fontSize=12, leading=15, spaceBefore=12, spaceAfter=5,
+                         textColor=ACCENT),
+    "h3": ParagraphStyle("fh3", parent=S["h2"], fontSize=10.5, leading=13.5, spaceBefore=8, spaceAfter=3),
+    "label": ParagraphStyle("label", parent=S["body"], fontName="Helvetica-Bold", spaceBefore=5, spaceAfter=2),
+    "table_caption": ParagraphStyle("table_caption", parent=S["caption"], textColor=INK, spaceBefore=8,
+                                    spaceAfter=4),
+    "toc0": ParagraphStyle("toc0", parent=S["body"], fontName="Helvetica-Bold", fontSize=9.5, leading=12,
+                           spaceBefore=5, spaceAfter=1),
+    "toc1": ParagraphStyle("toc1", parent=S["body"], fontSize=9, leading=11.5, leftIndent=14, spaceAfter=1),
+    "toc2": ParagraphStyle("toc2", parent=S["body"], fontSize=8.5, leading=11, leftIndent=28, textColor=MUTED,
+                           spaceAfter=1),
+}
+
+
+class _ListOfTables(TableOfContents):
+    """Same layout as the contents, filled from 'LOTEntry' notifications."""
+
+    def notify(self, kind, stuff):
+        if kind == "LOTEntry":
+            self.addEntry(*stuff)
+
+
+class _ReportDoc(BaseDocTemplate):
+    def __init__(self, buffer, meta, **kw):
+        super().__init__(buffer, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=22 * mm,
+                         bottomMargin=20 * mm, title=meta["title"], author=meta["validator"],
+                         subject=f"{meta['title']} - {meta['period']}", **kw)
+        self.meta = meta
+        frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id="body")
+        self.addPageTemplates([PageTemplate("cover", [frame], onPage=lambda c, d: None),
+                               PageTemplate("body", [frame], onPage=self._decorate)])
+
+    def _decorate(self, canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(MARGIN, PAGE_H - 13 * mm, _ascii_safe(self.meta["organisation"]))
+        canvas.drawRightString(PAGE_W - MARGIN, PAGE_H - 13 * mm, _ascii_safe(self.meta["title"]))
+        canvas.setStrokeColor(RULE)
+        canvas.line(MARGIN, PAGE_H - 15 * mm, PAGE_W - MARGIN, PAGE_H - 15 * mm)
+        canvas.line(MARGIN, 13 * mm, PAGE_W - MARGIN, 13 * mm)
+        canvas.drawString(MARGIN, 10 * mm, f"Generated {_ascii_safe(self.meta['generated_at'])} - AI-assisted, "
+                                           "verified automatically - subject to validator sign-off")
+        canvas.drawRightString(PAGE_W - MARGIN, 10 * mm, f"Page {doc.page}")
+        canvas.restoreState()
+
+    def afterFlowable(self, flowable):
+        toc = getattr(flowable, "_toc", None)
+        if toc:
+            level, text, key = toc
+            self.canv.bookmarkPage(key)
+            self.canv.addOutlineEntry(text, key, level=max(level - 1, 0) if level else 0, closed=level > 1)
+            self.notify("TOCEntry", (max(level - 1, 0), text, self.page, key))
+        lot = getattr(flowable, "_lot", None)
+        if lot:
+            self.canv.bookmarkPage(lot[1])
+            self.notify("LOTEntry", (0, lot[0], self.page, lot[1]))
+
+
+def _full_inline(text):
+    return _inline(text)
+
+
+def _rating_badge(value):
+    badge = _status_badge(value, width=70 * mm)
+    badge.hAlign = "LEFT"
+    return badge
+
+
+def _signoff_table(approval):
+    line = "_" * 42
+    rows = [("Validator name", line), ("Decision", "[ ] Approve     [ ] Request changes     [ ] Reject"),
+            ("Comments", line + "<br/>" + line), ("Date", line), ("Signature", line)]
+    if approval:
+        rows = [("Validator name", escape(approval.get("reviewer") or "-")),
+                ("Decision", escape(approval.get("decision") or "-")),
+                ("Comments", escape(_ascii_safe(approval.get("comment") or "-"))),
+                ("Date", escape(approval.get("run_at") or "-"))]
+    data = [[Paragraph(f"<b>{k}</b>", S["body"]), Paragraph(v, S["body"])] for k, v in rows]
+    table = Table(data, colWidths=[CONTENT_W * 0.25, CONTENT_W * 0.75], hAlign="LEFT")
+    table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 10)]))
+    return table
+
+
+def _full_cover(meta):
+    status = meta.get("overall_rating")
+    return [Spacer(1, 30 * mm), Paragraph(escape(_ascii_safe(meta["organisation"].upper())), FULL["cover_org"]),
+            Paragraph(escape(_ascii_safe(meta["title"])), FULL["cover_title"]),
+            Paragraph(f"Prepared by {escape(_ascii_safe(meta['validator']))}", S["subtitle"]),
+            Spacer(1, 18),
+            _key_value_table([("Overall rating", _rating_badge(status)),
+                              ("Latest period assessed", meta.get("period") or "-"),
+                              ("Report date", meta["generated_at"]),
+                              ("AI model", meta.get("model") or "-"),
+                              ("AI text verified", f"{meta.get('ai_parts', 0)} of {meta.get('parts', 0)} parts")]),
+            Spacer(1, 30 * mm),
+            Paragraph("This report was drafted by an AI agent from evidence produced by deterministic validation "
+                      "code. All tables, figures and ratings are computed by code, and every number in the AI text "
+                      "was checked against that evidence. The report is advisory until signed off by the validator.",
+                      S["note"])]
+
+
+def render_full_pdf(report, approval=None):
+    """report: validation_report.build_report(...) result. Returns PDF bytes."""
+    meta = report["meta"]
+    buffer = io.BytesIO()
+    doc = _ReportDoc(buffer, meta)
+    toc, lot = TableOfContents(), _ListOfTables()
+    toc.levelStyles = [FULL["toc0"], FULL["toc1"], FULL["toc2"]]
+    lot.levelStyles = [FULL["toc1"]]
+    compact = TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 0),
+                          ("BOTTOMPADDING", (0, 0), (-1, -1), 0), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                          ("RIGHTPADDING", (0, 0), (-1, -1), 0)])
+    toc.tableStyle = lot.tableStyle = compact
+    story = _full_cover(meta) + [NextPageTemplate("body"), PageBreak()]
+    numbers, table_no, figure_no, key_no = [0, 0, 0], 0, 0, 0
+
+    for block in report["blocks"]:
+        kind = block["type"]
+        if kind == "front_matter":
+            story += [Paragraph("Contents", FULL["h0"]), toc, PageBreak(),
+                      _toc_heading(0, "List of Tables", "lot"), lot, PageBreak()]
+        elif kind == "heading":
+            level = block["level"]
+            if level == 0:
+                label = block["text"]
+            else:
+                numbers[level - 1] += 1
+                for i in range(level, 3):
+                    numbers[i] = 0
+                label = ".".join(str(n) for n in numbers[:level]) + "  " + block["text"]
+            key_no += 1
+            story.append(_toc_heading(level, label, f"h{key_no}"))
+        elif kind == "para":
+            story.append(Paragraph(_full_inline(block["text"]), S["body"]))
+        elif kind == "label":
+            story.append(Paragraph(escape(_ascii_safe(block["text"])), FULL["label"]))
+        elif kind in ("bullets", "numbered"):
+            items = [ListItem(Paragraph(_full_inline(t), S["body"]), leftIndent=12) for t in block["items"]]
+            if items:
+                story.append(ListFlowable(items, bulletType="1" if kind == "numbered" else "bullet",
+                                          leftIndent=16, bulletFontSize=9 if kind == "numbered" else 7))
+        elif kind == "table":
+            if not block["rows"]:
+                continue
+            table_no += 1
+            caption = f"Table {table_no}: {block['caption']}"
+            title = Paragraph(escape(_ascii_safe(caption)), FULL["table_caption"])
+            title._lot = (_ascii_safe(caption), f"t{table_no}")
+            rows = [block["header"]] + block["rows"]
+            data = [[Paragraph(_full_inline(str(c)), S["cell_head"]) for c in block["header"]]]
+            data += [[Paragraph(_full_inline(str(c)), S["cell"]) for c in r] for r in block["rows"]]
+            table = _styled_table(data, _col_widths(rows))
+            # Short tables stay on one page with their caption; long ones may run over pages (header repeats).
+            story += [KeepTogether([title, table])] if len(block["rows"]) <= 12 else [title, table]
+            story.append(Spacer(1, 4))
+        elif kind == "rating":
+            story += [_rating_badge(block["text"]), Spacer(1, 4)]
+        elif kind == "chart":
+            figure_no += 1
+            story += [trend_chart(block["data"]),
+                      Paragraph(escape(f"Figure {figure_no}: {block['caption']}"), S["note"])]
+        elif kind == "signoff":
+            story.append(_signoff_table(approval))
+        elif kind == "pagebreak":
+            story.append(PageBreak())
+    doc.multiBuild(story)
+    return buffer.getvalue()
+
+
+def _toc_heading(level, text, key):
+    style = FULL["h0"] if level == 0 else FULL[f"h{min(level, 3)}"]
+    para = Paragraph(f'<a name="{key}"/>' + escape(_ascii_safe(text)), style)
+    para._toc = (level, _ascii_safe(text), key)
+    return para

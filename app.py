@@ -612,20 +612,32 @@ def agent_context(results, master, period, proposed_change=None):
                           benchmark=benchmark, quality=quality)
 
 
-def run_ai_validation(results, master, period):
-    """Run the AI agent on the stored validation results; the run is kept for the PDF and the approval form."""
-    import agent as A
+def generate_full_report(master_df, master):
+    """Write the full validation report with the AI agent (parts written in turn, each one verified)."""
+    import validation_report as VR
+    results, benchmark = db.load_monitoring_results(), db.load_benchmark_results()
     try:
-        with st.status(f"AI validation agent assessing {period}...", expanded=True) as status:
-            ctx = agent_context(results, master, period)
-            run = A.run_agent(ctx, on_step=lambda s: st.write(
-                f"Step {s['step']}: {s.get('stage') or s['type']} {('- ' + s['tool']) if s.get('tool') else ''}"))
-            status.update(label="AI validation finished", state="complete", expanded=False)
+        with st.status("AI agent writing the validation report (a few minutes on the Groq free tier)...",
+                       expanded=True) as status:
+            report = VR.build_report(results, benchmark, master_df, master, on_step=st.write)
+            status.update(label="Validation report ready", state="complete", expanded=False)
     except Exception as e:  # missing key, every model rate-limited, network error
-        st.error(f"The AI validation could not finish: {e}")
+        st.error(f"The AI validation report could not be written: {e}")
         return None
-    st.session_state["agent_run"] = run
-    return run
+    st.session_state["full_report"] = report
+    return report
+
+
+def full_report_files(report):
+    """PDF and Word bytes of the full report, rebuilt only when the sign-off changes."""
+    import report_docx as RD
+    import report_pdf as RP
+    approval = report.get("approval")
+    key = (approval or {}).get("run_at")
+    if "_files" not in report or report.get("_files_key") != key:
+        report["_files"] = (RP.render_full_pdf(report, approval), RD.render_full_docx(report, approval))
+        report["_files_key"] = key
+    return report["_files"]
 
 
 def report_pdf_bytes(run):
@@ -674,7 +686,7 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
 
     import agent as A
     has_key = bool(A.get_api_key())
-    then_ai = st.checkbox("Then run the AI validation and prepare the PDF report", value=has_key,
+    then_ai = st.checkbox("Then let the AI agent write the full validation report (PDF and Word)", value=has_key,
                           disabled=not has_key,
                           help=None if has_key else "Needs GROQ_API_KEY in the Streamlit secrets.")
     if st.button("Run Validation", type="primary"):
@@ -685,10 +697,9 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
         st.success("Validation complete. Results saved to the database.")
         if st.session_state.get("agent_run"):
             st.session_state["agent_run"].pop("_pdf", None)  # rebuild the PDF with the new results
-        if then_ai:
-            results = db.load_monitoring_results()
-            if run_ai_validation(results, master, results["period"].iloc[-1]):
-                st.success("AI validation report ready - download it in section 11 below.")
+        st.session_state.pop("full_report", None)            # the old report no longer matches the results
+        if then_ai and generate_full_report(master_df, master):
+            st.success("Validation report ready - download it in section 11 below.")
 
     results = db.load_monitoring_results()
     benchmark = db.load_benchmark_results()
@@ -780,35 +791,56 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
         show = st.success if note["Status"] == "Satisfactory" else st.warning
         show(f"**{note['Area']} - {note['Status']}:** {note['Observation']}")
 
-    st.subheader("11. AI validation report (PDF)")
-    st.write("The AI agent reads the evidence from the deterministic tools and writes a validation report; every "
-             "number it quotes is checked against that evidence. The PDF combines the AI report, the guardrail "
-             "checks, all coded results above (sections 1-10) and a validator sign-off page.")
+    st.subheader("11. Validation report (written by the AI agent)")
+    st.write("The AI agent writes a complete model validation report: background, executive summary, validation "
+             "approach, qualitative validation, quantitative validation and validation summary. Tables, figures "
+             "and ratings come from the code above; the agent writes the analysis, observations and "
+             "recommendations, and every number it writes is checked against the evidence.")
     if not has_key:
-        st.warning("No Groq API key found. Add GROQ_API_KEY to the Streamlit secrets to run the AI validation.")
-    period_list = list(results["period"].unique())
-    col1, col2 = st.columns([2, 1])
-    period = col1.selectbox("Period assessed by the AI agent (trends use all periods)", period_list,
-                            index=len(period_list) - 1, key="validation_ai_period")
-    col2.write("")
-    if col2.button("Run AI validation", disabled=not has_key):
-        run_ai_validation(results, master, period)
-    run = st.session_state.get("agent_run")
-    if not run:
-        st.info("Run the AI validation to create the PDF report.")
+        st.warning("No Groq API key found. Add GROQ_API_KEY to the Streamlit secrets to write the report.")
+    if st.button("Write validation report", disabled=not has_key):
+        generate_full_report(master_df, master)
+    report = st.session_state.get("full_report")
+    if not report:
+        st.info("Write the validation report to download it as PDF or Word.")
         return
-    ver = run["verification"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Period", run["period"])
-    c2.metric("Overall status (AI)", run["overall_status"] or "-")
-    c3.metric("Guardrail checks", "Passed" if ver["passed"] else "Failed")
-    c4.metric("Model", run["model"].split("/")[-1] if run["model"] else "-")
-    if not ver["passed"]:
-        st.warning("The AI report did not pass every guardrail check; the PDF says so on its first page.")
-    pdf_download(run, key="pdf_validation")
-    with st.expander("Preview the AI report"):
-        st.markdown(run["report"] or "_No report was submitted._")
-    st.caption("Record the validator's decision on the AI Agent page; the PDF downloaded there includes it.")
+    meta = report["meta"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Overall rating", meta["overall_rating"])
+    c2.metric("AI text verified", f"{meta['ai_parts']} of {meta['parts']} parts")
+    c3.metric("Model", meta["model"].split("/")[-1])
+    failed = [r for r in report["log"] if r["result"] != "AI text verified"]
+    if failed:
+        st.warning(f"{len(failed)} part(s) failed the automatic checks and use rule-based text instead; they are "
+                   "listed in Annexure B of the report.")
+    pdf, docx_bytes = full_report_files(report)
+    name = f"search_match_validation_report_{meta['period']}"
+    d1, d2 = st.columns(2)
+    d1.download_button("Download report (PDF)", pdf, file_name=f"{name}.pdf", mime="application/pdf",
+                       type="primary", key="full_pdf")
+    d2.download_button("Download report (Word)", docx_bytes, file_name=f"{name}.docx",
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       key="full_docx")
+    with st.expander("AI generation and verification log"):
+        st.dataframe(pd.DataFrame(report["log"]), hide_index=True, width="stretch")
+
+    if st.session_state.get("signoff_message"):
+        st.success(st.session_state.pop("signoff_message"))
+    st.markdown("**Validator sign-off**")
+    with st.form("full_report_signoff"):
+        reviewer = st.text_input("Validator name")
+        decision = st.radio("Decision", ["Approve", "Request changes", "Reject"], horizontal=True)
+        comment = st.text_area("Comment")
+        if st.form_submit_button("Record decision"):
+            run_at = pd.Timestamp.now().isoformat(timespec="seconds")
+            db.save_agent_run({
+                "run_at": run_at, "period": meta["period"], "model": meta["model"],
+                "overall_status": meta["overall_rating"], "breaches": "",
+                "verification_passed": not failed, "decision": decision, "reviewer": reviewer, "comment": comment,
+                "report": "Full validation report"})
+            report["approval"] = {"run_at": run_at, "reviewer": reviewer, "decision": decision, "comment": comment}
+            st.session_state["signoff_message"] = f"Decision '{decision}' recorded; the downloads now include it."
+            st.rerun()  # rebuild the downloads with the signed sign-off page
 
 
 # ==================================================================

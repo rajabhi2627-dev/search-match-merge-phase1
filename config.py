@@ -180,7 +180,13 @@ GROQ_TOKENS_PER_MINUTE = 8000
 AGENT_MAX_REVISIONS = 2          # self-correction rounds when verification fails
 AGENT_STABILITY_RUNS = 3         # repeated runs per stability scenario
 
-ANOMALY_CHANGE_PP = 5.0          # month-on-month KPI change (percentage points) flagged as an anomaly
+# Full validation report (Validation page, section 11): names on the cover and in the text.
+REPORT_TITLE = "Search and Match Model Validation Report"
+REPORT_ORGANISATION = "Credit Information Company"            # owner of the Search & Match model
+REPORT_VALIDATOR = "Independent Model Validation Function"    # who performs the validation
+REPORT_SECTION_REVISIONS = 1     # AI self-corrections per report part when a check fails
+
+ANOMALY_CHANGE_PP = 5.0         # month-on-month KPI change (percentage points) flagged as an anomaly
 TREND_PERIODS = 3                # consecutive deteriorations that count as an adverse trend
 NEAR_THRESHOLD_MARGIN = 5        # MATCH decisions scoring < MATCH_THRESHOLD + margin are flagged
 SMALL_GAP_MARGIN = 10            # MATCH decisions with score gap < this are flagged

@@ -29,7 +29,6 @@ def data():
 
 def _answer(call, evidence):
     """What a well-behaved model would submit: correct ratings and only numbers from the evidence."""
-    rates = evidence.get("rule_based_ratings", {})
     answer = {}
     for part in R.CALL_PARTS[call]:
         if part in R.QUANT_SECTIONS:
@@ -39,18 +38,15 @@ def _answer(call, evidence):
                 point = f"The hit rate was {first['hit_rate_pct']}% in {first['period']}."
             answer[part] = {"analysis": [point, "The results are consistent across periods.", "No anomaly was found."],
                             "observation": "The review indicates results in line with the rule-based assessment.",
-                            "recommendation": "The model owner may consider continued monitoring.",
-                            "rating": rates[part]}
+                            "recommendation": "The model owner may consider continued monitoring."}
         elif part in ("documentation_review", "data_quality_rows"):
             areas = R.DOC_AREAS if part == "documentation_review" else R.DQ_AREAS
-            answer[part] = [{"area": a, "observation": "Documented in the README.", "recommendation": "Keep it current."}
-                            for a in areas]
+            answer[part] = {a: {"observation": "Documented in the README.", "recommendation": "Keep it current."}
+                            for a in areas}
         elif part in R.QUAL_SECTIONS:
             answer[part] = {"assessment": "Reviewed.", "observation": "Documented.", "recommendation": "Keep it current."}
         elif part == "validation_summary":
             answer[part] = ["Work performed.", "Results."]
-        elif part == "overall_rating":
-            answer[part] = evidence["overall_rating"]
         else:
             answer[part] = "Adequate."
     return answer
@@ -65,10 +61,9 @@ def bad_ask(call, evidence, check):
     answer = json.loads(json.dumps(_answer(call, evidence)))
     if call == "quant_a":
         answer["performance"]["observation"] = "The hit rate was 77.7%."                 # invented number
-        part = "challenger"
-        answer[part]["rating"] = R.NEEDS if answer[part]["rating"] == R.SAT else R.SAT   # wrong rating
+        answer["challenger"]["analysis"][1] = "Recall improved by 12.3 pp."                # invented number
     if call == "qual_a1":
-        answer["documentation_review"] = answer["documentation_review"][:2]              # missing areas
+        answer["documentation_review"] = dict(list(answer["documentation_review"].items())[:2])  # missing areas
     if call == "qual_b2":
         answer["governance"]["observation"] = "See Table 3."                             # table reference
     return answer, "test-model", 1, check(answer)

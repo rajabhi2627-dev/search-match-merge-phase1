@@ -219,8 +219,8 @@ monitoring and validation).
 
 | Step | Implementation |
 |---|---|
-| Evidence pipeline | deterministic tools (`agent_tools.py`): data integrity, logic review, KPIs, threshold and breach detection, trends and anomalies, potential incorrect matches, Cochran sampling, change management, root causes |
-| LLM agent | Groq `openai/gpt-oss-120b` (fallback `gpt-oss-20b`, `qwen3.8-27b` when rate-limited), temperature 0; retrieves policy sections with a tool and writes the 9-section report |
+| Evidence pipeline | deterministic tools (`agent_tools.py`): data integrity, logic review, KPIs, threshold and breach detection, trends and anomalies, potential incorrect matches, Cochran sampling, challenger benchmarking and threshold calibration (from the Validation page), change management, root causes |
+| LLM agent | Groq `openai/gpt-oss-120b` (waits up to 45 s for it when rate-limited, then falls back to `gpt-oss-20b`; production models only), temperature 0; retrieves policy sections with a tool and writes the 10-section report (up to 1,000 words) |
 | Guardrails | every number in the report must appear in the evidence; status and breaches must equal the threshold check; all sections present; data issues reported; instructions inside data are ignored |
 | Self-correction | failed checks are returned to the agent (up to 2 revisions) |
 | Human in the loop | the validator approves, rejects or requests changes; decisions are stored |
@@ -242,7 +242,9 @@ Run the suite from the command line with `python run_agent_validation.py`; resul
 `data/agent_validation_results.csv` and shown on the dashboard.
 
 **API key:** set `GROQ_API_KEY` as an environment variable, in Streamlit secrets, or in a `groq_api_key.txt`
-next to the project (git-ignored). The key is never stored in the repository. Only aggregated KPIs and public
+next to the project (git-ignored). The key is never stored in the repository.
+On a paid Groq plan, also set `GROQ_TOKENS_PER_MINUTE` (e.g. `250000`) in the secrets so the agent can use the
+higher limit; the default `8000` matches the free tier. Only aggregated KPIs and public
 FEBRL record IDs are sent to the LLM.
 
 ## 14. Installation and execution

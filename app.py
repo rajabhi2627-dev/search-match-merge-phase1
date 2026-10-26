@@ -600,13 +600,24 @@ PERCENT_COLUMNS = V.PERCENT_COLUMNS   # shared with the PDF report
 REPORT_LABELS = V.REPORT_LABELS
 
 
+def agent_context(results, master, period, proposed_change=None):
+    """Agent context with the coded validation results (challengers, calibration, data quality) when available."""
+    import agent_tools as T
+    benchmark, quality = db.load_benchmark_results(), None
+    if benchmark.empty:
+        benchmark = None
+    else:
+        quality = V.data_quality(results, get_master()[0])
+    return T.live_context(results, master, period=period, proposed_change=proposed_change,
+                          benchmark=benchmark, quality=quality)
+
+
 def run_ai_validation(results, master, period):
     """Run the AI agent on the stored validation results; the run is kept for the PDF and the approval form."""
     import agent as A
-    import agent_tools as T
     try:
         with st.status(f"AI validation agent assessing {period}...", expanded=True) as status:
-            ctx = T.live_context(results, master, period=period)
+            ctx = agent_context(results, master, period)
             run = A.run_agent(ctx, on_step=lambda s: st.write(
                 f"Step {s['step']}: {s.get('stage') or s['type']} {('- ' + s['tool']) if s.get('tool') else ''}"))
             status.update(label="AI validation finished", state="complete", expanded=False)
@@ -808,7 +819,8 @@ SOLUTION_DEFINITION = pd.DataFrame([
     ("Model", "Search & Match algorithm (deterministic fuzzy matching, FEBRL-4 data)"),
     ("Agent", f"LLM agent on Groq ({C.GROQ_MODEL}, fallback {', '.join(C.GROQ_FALLBACK_MODELS)}), temperature 0"),
     ("Tools", "Deterministic Python tools: data integrity, logic review, KPIs, thresholds, trends, potential "
-              "incorrect matches, sampling, change management, root causes, policy retrieval"),
+              "incorrect matches, sampling, challenger benchmarking and threshold calibration, change management, "
+              "root causes, policy retrieval"),
     ("Guardrails", "Every number in the report must come from the evidence; status and breaches must match the "
                    "threshold check; all sections required; instructions inside data are ignored"),
     ("Self-correction", f"Failed checks are sent back to the agent (up to {C.AGENT_MAX_REVISIONS} revisions)"),
@@ -842,7 +854,6 @@ def show_agent_run(run):
 
 def page_agent(master):
     import agent as A
-    import agent_tools as T
 
     st.header("AI Agent - Agentic Monitoring")
     st.write("An LLM agent monitors and validates the Search & Match algorithm following the concept note "
@@ -879,7 +890,7 @@ def page_agent(master):
             if st.button("Run AI Agent", type="primary", disabled=not has_key):
                 try:
                     with st.status("Agent running...", expanded=True) as status:
-                        ctx = T.live_context(results, master, period=period, proposed_change=change or None)
+                        ctx = agent_context(results, master, period, proposed_change=change or None)
                         run = A.run_agent(ctx, on_step=lambda s: st.write(
                             f"Step {s['step']}: {s.get('stage') or s['type']} "
                             f"{('- ' + s['tool']) if s.get('tool') else ''}"))

@@ -502,9 +502,10 @@ def kpi_dictionary_table():
         t = C.KPI_THRESHOLDS[key]
         sign = "≥" if t["direction"] == "higher" else "≤"
         worse = "<" if t["direction"] == "higher" else ">"
+        pct = lambda v: f"{v * 100:g}%"
         rows.append({"KPI": info["label"], "What it measures": info["meaning"], "Formula": info["formula"],
-                     "Green": f"{sign} {t['green']:.0%}", "Amber": f"{sign} {t['amber']:.0%}",
-                     "Red": f"{worse} {t['amber']:.0%}"})
+                     "Green": f"{sign} {pct(t['green'])}", "Amber": f"{sign} {pct(t['amber'])}",
+                     "Red": f"{worse} {pct(t['amber'])}"})
     return pd.DataFrame(rows)
 
 
@@ -984,30 +985,47 @@ def page_agent(master):
 # NAVIGATION
 # ==================================================================
 
+STYLE = """
+<style>
+h1, h2, h3 { color: #0B2545; }
+[data-testid="stMetric"] {
+    background: #F3F6FB; border: 1px solid #D9E1EC; border-left: 4px solid #0B3D91;
+    border-radius: 0.5rem; padding: 0.6rem 0.9rem;
+}
+[data-testid="stSidebarHeader"] img { height: 2.4rem; max-width: 100%; }
+</style>
+"""
+
+
 def main():
     master_df, master = get_master()
-    st.sidebar.title("Search, Match & Merge")
-    st.sidebar.caption("Phase 1 prototype - deterministic matching")
-    page = st.sidebar.radio("Go to", ["Search & Match", "Test Data", "Performance", "Monitoring", "Validation",
-                                      "AI Agent", "Methodology"])
-    st.sidebar.divider()
+    st.markdown(STYLE, unsafe_allow_html=True)
+    st.logo(str(C.PROJECT_DIR / "assets" / "logo.svg"), size="large")
+
+    def page(func, title, icon, slug, default=False):
+        return st.Page(func, title=title, icon=icon, url_path=slug, default=default)
+
+    navigation = st.navigation({
+        "Matching": [
+            page(lambda: page_search(master_df, master), "Search & Match", ":material/person_search:", "search", True),
+            page(lambda: page_test_data(master_df, master), "Test Data", ":material/dataset:", "test-data"),
+        ],
+        "Performance": [
+            page(page_performance, "Performance", ":material/analytics:", "performance"),
+            page(lambda: page_monitoring(master), "Monitoring", ":material/monitoring:", "monitoring"),
+        ],
+        "Validation": [
+            page(lambda: page_validation(master_df, master), "Validation", ":material/fact_check:", "validation"),
+            page(lambda: page_agent(master), "AI Agent", ":material/smart_toy:", "ai-agent"),
+        ],
+        "Reference": [
+            page(page_methodology, "Methodology", ":material/menu_book:", "methodology"),
+        ],
+    })
+    st.sidebar.caption("Phase 1 prototype · deterministic matching")
     st.sidebar.caption(f"Dataset: {C.DATASET_NAME} benchmark")
     st.sidebar.caption(f"Master records: {len(master_df):,}")
-
-    if page == "Search & Match":
-        page_search(master_df, master)
-    elif page == "Test Data":
-        page_test_data(master_df, master)
-    elif page == "Performance":
-        page_performance()
-    elif page == "Monitoring":
-        page_monitoring(master)
-    elif page == "Validation":
-        page_validation(master_df, master)
-    elif page == "AI Agent":
-        page_agent(master)
-    else:
-        page_methodology()
+    navigation.run()
 
 
 main()

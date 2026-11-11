@@ -6,3 +6,21 @@ toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#0B3D91"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6FB"
+textColor = "#1B2A3A"
+font = "sans-serif"
+headingFont = "sans-serif"
+borderColor = "#D9E1EC"
+baseRadius = "0.5rem"
+
+[theme.sidebar]
+backgroundColor = "#0B2545"
+secondaryBackgroundColor = "#13315C"
+textColor = "#E8EEF7"
+primaryColor = "#8DB8F2"
+borderColor = "#1F4170"

@@ -235,13 +235,12 @@ monitoring and validation).
 
 **Validation report written by the AI agent.** On the **AI Agent** page, *Validation report* tab, click
 *Generate validation report* (the coded validation runs first if needed). `validation_report.py` produces a
-complete model validation report - Background, Executive Summary, Validation Approach, Qualitative Validation
-(documentation, purpose, data quality, model design, algorithms, disputes, governance, monitoring), Quantitative
+quantitative model validation report - Background, Executive Summary, Validation Approach, Quantitative
 Validation (data overview, hit and dispute rates, search paths, challengers, Type I/II errors, disputes, root causes,
 threshold calibration), Validation Summary, sign-off and annexures - downloadable as PDF (`report_pdf.py`) and Word
 (`report_docx.py`). Tables, figures, the model description and every rating come from code; the agent writes the
-analysis, observations and recommendations in eight small verified parts (numbers traced to the evidence, ratings equal
-to the rule-based ratings, fixed review areas present). All text is written by the AI: a part that fails gets up to
+analysis, observations and recommendations in four small verified parts (numbers traced to the evidence, ratings equal
+to the rule-based ratings, every analysis complete). All text is written by the AI: a part that fails gets up to
 3 correction rounds; if it still fails, the AI text is kept, marked in the report and listed in Annexure B. The validator records the decision on the same tab, and the downloads then include it.
 Organisation and validator names are set in `config.py` (`REPORT_ORGANISATION`, `REPORT_VALIDATOR`).
 
@@ -310,5 +309,5 @@ search_match_project/
 
 **Groq token limits.** Every request is sized so that prompt + reserved answer stay below the tokens-per-minute
 limit (8,000 on the free tier) with headroom; a "request too large" reply shrinks the answer budget and retries.
-The full report is written in eight small parts with word limits, a revision resends only the failed parts, and when
+The full report is written in four small parts with word limits, a revision resends only the failed parts, and when
 Groq is busy the call waits and retries. All report text is written by the AI.

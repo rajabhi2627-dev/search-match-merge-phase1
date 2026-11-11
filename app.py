@@ -794,8 +794,8 @@ disputes are simulated with a fixed seed, and everything is rule-based (no machi
 
 def full_report_panel(master_df, master, has_key):
     """Generate, download and sign off the full validation report."""
-    st.write("The AI agent writes a complete model validation report: background, executive summary, validation "
-             "approach, qualitative validation, quantitative validation and validation summary. Tables, figures "
+    st.write("The AI agent writes a quantitative model validation report: background, executive summary, "
+             "validation approach, quantitative validation and validation summary. Tables, figures "
              "and ratings come from the coded validation; the agent writes the analysis, observations and "
              "recommendations in small parts, and every number it writes is checked against the evidence.")
     if st.button("Generate validation report", type="primary", disabled=not has_key):

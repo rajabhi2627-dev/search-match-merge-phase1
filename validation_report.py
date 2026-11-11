@@ -1,16 +1,16 @@
 """
 Full model validation report of the Search & Match algorithm, written by the AI agent with minimal human input.
 
-The report follows the structure of a formal model validation report:
-  1 Background - 2 Executive Summary - 3 Validation Approach - 4 Qualitative Validation -
-  5 Quantitative Validation - 6 Validation Summary - 7 Validator Sign-off - Annexures
+The report covers the quantitative validation only:
+  1 Background - 2 Executive Summary - 3 Validation Approach - 4 Quantitative Validation -
+  5 Validation Summary - 6 Validator Sign-off - Annexures
 
 Who writes what
   - Rules / code: every table, every figure, the description of the model (from config.py) and the rating of
     every assessment area (Satisfactory / Needs attention). Nothing here depends on the LLM.
   - AI agent: the analysis points, observations, recommendations and summaries, written from the evidence.
   - Guardrails: every number in the AI text must appear in the evidence, KPI values must sit next to the right
-    KPI, and every review area must be covered (ratings and area names are filled in by code).
+    KPI, and every analysis must be complete (ratings are filled in by code).
     All text is written by the AI: a part that fails is sent back with the problems for up to
     REPORT_SECTION_REVISIONS correction rounds; if it still fails, the AI text is kept, marked in the report and
     listed in Annexure B.
@@ -21,7 +21,6 @@ import json
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
@@ -100,19 +99,6 @@ QUANT_HEADINGS = {
     "disputes": "Dispute and Incorrect Merge Analysis",
     "rca": "Clustering and Root Cause Analysis of Exceptions",
     "calibration": "Threshold Calibration and Sensitivity Analysis",
-}
-DOC_AREAS = ["Model documentation", "Data quality and input controls", "Model design and methodology",
-             "Threshold calibration", "Performance monitoring", "Model assumptions and limitations"]
-DQ_AREAS = ["Input data completeness", "Data validity", "Standardisation and pre-processing",
-            "Representativeness of the validation data"]
-QUAL_SECTIONS = {
-    "design_framework": "Search and match framework",
-    "score_construction": "Match score construction",
-    "thresholds": "Matching threshold and decision logic",
-    "algorithms": "Algorithm and rule review",
-    "dispute_framework": "Dispute and error analysis framework",
-    "governance": "Model governance and change management",
-    "monitoring": "Model monitoring",
 }
 
 
@@ -194,7 +180,8 @@ def _calibration_rating(calibration):
     if current.empty:
         return SAT
     cur = current.iloc[0]
-    dominated = rows[(rows["precision"] >= cur["precision"]) & (rows["recall"] > cur["recall"])
+    better_recall = rows["recall"] >= cur["recall"] + C.CALIBRATION_MIN_RECALL_GAIN
+    dominated = rows[(rows["precision"] >= cur["precision"]) & better_recall
                      & (rows["incorrect_merges"] <= cur["incorrect_merges"]) & (rows["review_rate"] <= cur["review_rate"])]
     return NEEDS if len(dominated) else SAT
 
@@ -213,7 +200,6 @@ def ratings(ev):
         "disputes": ok("Disputes and incorrect merges"),
         "rca": ok("Root cause analysis"),
         "calibration": _calibration_rating(ev["calibration"]),
-        "data_quality": ok("Data quality"),
     }
 
 
@@ -268,6 +254,9 @@ def evidence_for(group, ev, rates, previous=None):
         return {**common,
                 "rule_based_ratings": {k: rates[k] for k in ("rca", "calibration")},
                 "current_thresholds": {"match_threshold": C.MATCH_THRESHOLD, "review_threshold": C.REVIEW_THRESHOLD},
+                "calibration_rating_rule": "Needs attention only if another MATCH threshold adds at least "
+                                           f"{100 * C.CALIBRATION_MIN_RECALL_GAIN:g} pp recall with no lower "
+                                           "precision, no more incorrect merges and no higher manual review rate",
                 "exceptions": len(ev["exceptions"]),
                 "root_causes": _records(ev["rca"], pct_cols=["Contribution"]),
                 "error_patterns": _records(ev["patterns"].head(8)),
@@ -276,41 +265,6 @@ def evidence_for(group, ev, rates, previous=None):
                                                                      "review_rate", "type1_error", "type2_error",
                                                                      "incorrect_merges"]],
                                                   pct_cols=V.PERCENT_COLUMNS)}
-    if group == "qual_a":
-        return {**common,
-                "documentation_available": _documentation_inventory(),
-                "assumptions": ASSUMPTIONS, "limitations": LIMITATIONS,
-                "data_quality_checks": _records(ev["quality"], pct_cols=V.PERCENT_COLUMNS),
-                "data_quality_rating": rates["data_quality"],
-                "normalisation_rules": NORMALISATION_RULES,
-                "validation_sample": {k: ev["sample"].get(k) for k in ("population", "required_sample_size",
-                                                                       "sample_size", "errors_found",
-                                                                       "sample_error_rate_pct")},
-                "monitoring_periods": list(C.MONITORING_PERIODS),
-                "records_per_period": C.MONITORING_MATCH_COUNT + C.MONITORING_NO_MATCH_COUNT}
-    if group == "qual_b":
-        m = ev["methodology"]
-        change = ev["change"]
-        return {**common,
-                "methodology": {k: m[k] for k in ("fields", "search_rules", "decision_rules", "conflict_rules",
-                                                  "strong_corroboration")},
-                "basis_of_weights_and_thresholds": "expert judgement, checked with threshold calibration on the "
-                                                   "validation sample; no empirical optimisation is documented",
-                "challenger_cutoffs": C.CHALLENGER_CUTOFFS,
-                "dispute_handling": "disputes are categorised as 'does not belong to me' (wrong merge) and "
-                                    "'I already have an account' (missed duplicate); exceptions are grouped by "
-                                    "root cause and by the set of attributes that differ (rule-based clustering)",
-                "change_log": [{k: c[k] for k in ("version", "date", "change", "impact_assessed", "approved_by")}
-                               for c in change["change_log"]],
-                "changes_without_recorded_approval": change["changes_without_recorded_approval"],
-                "approval_levels": change["approval_levels"],
-                "kpi_limits": _kpi_limits(),
-                "monitoring": {"periods": list(C.MONITORING_PERIODS), "anomaly_change_pp": C.ANOMALY_CHANGE_PP,
-                               "adverse_trend_periods": C.TREND_PERIODS, "escalation": T.POLICY["escalation"]},
-                "latest_period_status": ev["thresholds"]["overall_status"],
-                "latest_period_breaches": ev["thresholds"]["breaches"],
-                "ai_agent": f"LLM agent ({C.GROQ_MODEL}) monitors and validates; deterministic guardrails; "
-                            "human sign-off"}
     if group == "summary":
         return {**common, **(previous or {}),
                 "rule_based_ratings": rates, "overall_rating": overall_rating(ev, rates),
@@ -331,18 +285,6 @@ NORMALISATION_RULES = [
     "Date of birth: converted to YYYY-MM-DD; invalid dates treated as missing",
     "Missing fields are excluded from the weighted score and the remaining weights re-scaled",
 ]
-
-
-def _documentation_inventory():
-    readme = Path(C.PROJECT_DIR / "README.md")
-    headings = re.findall(r"(?m)^##\s+(.*)$", readme.read_text(encoding="utf-8")) if readme.exists() else []
-    tests = sorted(p.name for p in (C.PROJECT_DIR / "tests").glob("test_*.py"))
-    return {"readme_sections": headings,
-            "parameter_file": "config.py holds every weight, threshold and limit with comments",
-            "methodology_page": "the dashboard's Methodology page explains normalisation, matching methods, "
-                                "decision rules, assumptions and limitations",
-            "automated_tests": tests,
-            "standalone_model_development_document": "not available"}
 
 
 # ==================================================================
@@ -371,27 +313,10 @@ QUANT_SCHEMA = {"type": "object", "properties": {
     "observation": {"type": "string", "description": "conclusion, at most 45 words"},
     "recommendation": {"type": "string", "description": "at most 30 words"}},
     "required": ["analysis", "observation", "recommendation"]}
-AREA_ENTRY = {"type": "object", "properties": {
-    "observation": {"type": "string", "description": "at most 35 words"},
-    "recommendation": {"type": "string", "description": "at most 25 words"}},
-    "required": ["observation", "recommendation"]}
-
-
-def areas_schema(areas):
-    return {"type": "object", "properties": {a: AREA_ENTRY for a in areas}, "required": list(areas)}
-
-
-QUAL_SCHEMA = {"type": "object", "properties": {
-    "assessment": {"type": "string", "description": "what the review found, at most 45 words"},
-    "observation": {"type": "string", "description": "at most 35 words"},
-    "recommendation": {"type": "string", "description": "at most 30 words"}},
-    "required": ["assessment", "observation", "recommendation"]}
 PARAGRAPH = {"type": "string", "description": "one paragraph, at most 60 words"}
 
 PART_SCHEMAS = {**{k: QUANT_SCHEMA for k in QUANT_SECTIONS},
-                "documentation_review": areas_schema(DOC_AREAS), "data_quality_rows": areas_schema(DQ_AREAS),
-                "data_quality_conclusion": PARAGRAPH, **{k: QUAL_SCHEMA for k in QUAL_SECTIONS},
-                "qualitative_assessment": PARAGRAPH, "quantitative_assessment": PARAGRAPH, "conclusion": PARAGRAPH,
+                "quantitative_assessment": PARAGRAPH, "conclusion": PARAGRAPH,
                 "validation_summary": {"type": "array", "items": STR,
                                        "description": "exactly 3 paragraphs, at most 60 words each"}}
 
@@ -407,18 +332,6 @@ PART_INSTRUCTIONS = {
            "data quality or matching logic",
     "calibration": "effect on precision, recall, manual review and incorrect merges of raising or lowering the MATCH "
                    "and REVIEW thresholds; is the current setting a reasonable balance",
-    "documentation_review": "an observation and a recommendation for each documentation area",
-    "data_quality_rows": "an observation and a recommendation for each data quality area",
-    "data_quality_conclusion": "conclusion on data quality, consistent with data_quality_rating",
-    "design_framework": "search rules, candidate limits and the search-match-decision framework",
-    "score_construction": "field methods, agreement thresholds, edit distances and weights",
-    "thresholds": "MATCH / REVIEW thresholds, score gap, conflict rules and the basis for choosing them",
-    "algorithms": "suitability of each production method and of the challenger algorithms and cut-offs",
-    "dispute_framework": "how disputes and exceptions are categorised and analysed, and whether results feed back "
-                         "into recalibration",
-    "governance": "change log, impact assessment, approvals and approval levels",
-    "monitoring": "KPIs, limits, anomaly and trend rules, escalation, and the latest period status",
-    "qualitative_assessment": "summary of the qualitative validation",
     "quantitative_assessment": "summary of the quantitative validation",
     "conclusion": "state the overall_rating from the evidence and what it means for the continued use of the model",
     "validation_summary": "work performed, main results, key findings and recommendations, overall conclusion",
@@ -431,16 +344,8 @@ CALLS = [
     ("quant_b", "Quantitative validation: Type I / II errors and disputes", "quant_b", ["errors", "disputes"],
      "quant_b"),
     ("quant_c", "Quantitative validation: root causes and calibration", "quant_c", ["rca", "calibration"], "quant_b"),
-    ("qual_a1", "Qualitative validation: documentation review", "qual_a", ["documentation_review"], "qual_a"),
-    ("qual_a2", "Qualitative validation: data quality", "qual_a", ["data_quality_rows", "data_quality_conclusion"],
-     "qual_a"),
-    ("qual_b1", "Qualitative validation: model design and algorithms", "qual_b",
-     ["design_framework", "score_construction", "thresholds", "algorithms"], "qual_b"),
-    ("qual_b2", "Qualitative validation: disputes, governance and monitoring", "qual_b",
-     ["dispute_framework", "governance", "monitoring"], "qual_b"),
     ("summary", "Executive summary and validation summary", "summary",
-     ["qualitative_assessment", "quantitative_assessment", "conclusion", "validation_summary"],
-     "summary"),
+     ["quantitative_assessment", "conclusion", "validation_summary"], "summary"),
 ]
 CALL_PARTS = {call: parts for call, _, _, parts, _ in CALLS}
 REPORT_PART_MAX_OUTPUT = 2500    # answer tokens reserved per call (the short parts need well under this)
@@ -453,9 +358,8 @@ def call_schema(parts):
 def call_instructions(parts):
     return ("Write these parts of the validation report, keeping to the word limits in the tool schema:\n"
             + "\n".join(f"- {p}: {PART_INSTRUCTIONS[p]}" for p in parts)
-            + "\nQuantitative parts: 3 analysis points citing figures, an observation and a recommendation, "
-              "consistent with the rule-based rating."
-              "\nQualitative parts: what the review found, an observation and a recommendation.")
+            + "\nAnalysis parts: 3 analysis points citing figures, an observation and a recommendation, "
+              "consistent with the rule-based rating.")
 
 
 REFERENCE_RE = re.compile(r"\b(?:table|section|annexure|appendix|figure)\s+\d", re.I)
@@ -498,11 +402,6 @@ def check_answer(parts, answer, evidence, rates, overall, extra_allowed=()):
         if part in QUANT_SECTIONS:
             if not isinstance(value, dict) or len(value.get("analysis") or []) < 2:
                 add(part, "give an object with at least 2 analysis points, an observation and a recommendation.")
-        if part in ("documentation_review", "data_quality_rows"):
-            expected = DOC_AREAS if part == "documentation_review" else DQ_AREAS
-            missing = [a for a in expected if not isinstance(value, dict) or not isinstance(value.get(a), dict)]
-            if missing:
-                add(part, f"write an entry for each of these areas: {missing}.")
     return problems
 
 
@@ -588,14 +487,6 @@ def _shape(part, value):
         analysis = v.get("analysis") if isinstance(v.get("analysis"), list) else [text(v.get("analysis"))]
         return {"analysis": [text(a) for a in analysis if text(a)], "observation": text(v.get("observation")),
                 "recommendation": text(v.get("recommendation"))}
-    if part in ("documentation_review", "data_quality_rows"):
-        areas = DOC_AREAS if part == "documentation_review" else DQ_AREAS
-        value = value if isinstance(value, dict) else {}
-        return [{"area": a, "observation": text((value.get(a) or {}).get("observation")),
-                 "recommendation": text((value.get(a) or {}).get("recommendation"))} for a in areas]
-    if part in QUAL_SECTIONS:
-        v = value if isinstance(value, dict) else {"assessment": text(value)}
-        return {k: text(v.get(k)) for k in ("assessment", "observation", "recommendation")}
     if part == "validation_summary":
         return [text(p) for p in (value if isinstance(value, list) else [value]) if text(p)]
     return text(value)
@@ -614,15 +505,13 @@ def generate_texts(ev, ask, on_step=None):
     """Run the AI calls in order; returns (texts per report part group, generation log)."""
     rates = ratings(ev)
     overall = overall_rating(ev, rates)
-    texts = {"quant_a": {}, "quant_b": {}, "qual_a": {}, "qual_b": {}, "summary": {}, "unverified": set()}
+    texts = {"quant_a": {}, "quant_b": {}, "summary": {}, "unverified": set()}
     log, all_numbers = [], set()
     for n, (call, label, pack, parts, store) in enumerate(CALLS, 1):
         previous = None
         if pack == "summary":
             previous = {"observations": {
-                **{k: v["observation"] for k, v in {**texts["quant_a"], **texts["quant_b"]}.items()},
-                "data_quality": texts["qual_a"]["data_quality_conclusion"],
-                **{k: v["observation"] for k, v in texts["qual_b"].items()}}}
+                k: v["observation"] for k, v in {**texts["quant_a"], **texts["quant_b"]}.items()}}
         evidence = evidence_for(pack, ev, rates, previous)
         all_numbers |= A._numbers_in(evidence, set())
         if on_step:
@@ -725,24 +614,14 @@ def _quant_result(part, t, rating, unverified):
     return blocks + _flag(part, unverified)
 
 
-def _qual_result(part, t, unverified):
-    return [Para(t["assessment"]), Label("Observation"), Para(t["observation"]), Label("Recommendation"),
-            Para(t["recommendation"])] + _flag(part, unverified)
-
-
-def _rows_table(caption, rows):
-    return Table(caption, ["Sr. No.", "Area", "Observation", "Recommendation"],
-                 [[i, r["area"], r["observation"], r["recommendation"]] for i, r in enumerate(rows, 1)])
-
-
 def assemble(ev, texts, rates, log, meta):
-    qa, qb, la, lb, sm = (texts[g] for g in ("quant_a", "quant_b", "qual_a", "qual_b", "summary"))
+    qa, qb, sm = (texts[g] for g in ("quant_a", "quant_b", "summary"))
     un = texts.get("unverified", set())
     overall = meta["overall_rating"]
     o = ev["overall"]
     periods = ev["periods"]
     n_periods, n_records = len(periods), o["records"]
-    org, fields = C.REPORT_ORGANISATION, ev["methodology"]["fields"]
+    org = C.REPORT_ORGANISATION
     field_list = ", ".join(C.FIELD_LABELS[f] for f in C.FIELDS)
     weights = ", ".join(f"{C.FIELD_LABELS[f]} {_weight(f)}" for f in C.FIELDS)
     b = []
@@ -764,15 +643,15 @@ def assemble(ev, texts, rates, log, meta):
                "every record is known. Because the quality of entity identification drives the reliability of every "
                "downstream report, the framework is subject to periodic monitoring and independent validation."),
           Label("Scope of work"),
-          Para(f"{C.REPORT_VALIDATOR} performed an independent validation of the S&M framework to assess its "
-               "conceptual soundness, implementation, governance and performance. The review covered:"),
-          Bullets(["The Search, Match and Merge processes and the underlying methodology.",
-                   "Search paths, matching logic, scoring and the threshold framework.",
+          Para(f"{C.REPORT_VALIDATOR} performed an independent quantitative validation of the S&M framework to "
+               "assess its matching accuracy, error characteristics and stability. The review covered:"),
+          Bullets(["Hit rates and dispute rates by period.",
+                   "Search paths and the contribution of each attribute to the match score.",
                    "Benchmarking against alternative (challenger) algorithms.",
-                   "Exceptions, disputes, incorrect merges and their root causes.",
-                   "Performance monitoring metrics, including hit rates and dispute rates.",
-                   "The sampling approach used to test matching outcomes.",
-                   "Governance, monitoring and change management of the framework."]),
+                   "Type I and Type II errors, disputes and incorrect merges.",
+                   "Root causes of exceptions.",
+                   "Sensitivity of the results to the decision thresholds.",
+                   "The sampling approach used to test matching outcomes."]),
           {"type": "pagebreak"}]
 
     # ---------------- 2 Executive summary ----------------
@@ -788,22 +667,18 @@ def assemble(ev, texts, rates, log, meta):
                "subject (NO MATCH)."),
           H(2, "Validation Outcome"), Label("Overall assessment"), Rating(overall), Para(sm["conclusion"]),
           *_flag("conclusion", un),
-          Label("Qualitative assessment"), Para(sm["qualitative_assessment"]), *_flag("qualitative_assessment", un),
           Label("Quantitative assessment"), Para(sm["quantitative_assessment"]), *_flag("quantitative_assessment", un),
           Table("Summary of quantitative assessments", ["Area", "Assessment"],
-                [[_cap(QUANT_SECTIONS[k]), rates[k]] for k in QUANT_SECTIONS]
-                + [["Data quality", rates["data_quality"]]]),
+                [[_cap(QUANT_SECTIONS[k]), rates[k]] for k in QUANT_SECTIONS]),
           {"type": "pagebreak"}]
 
     # ---------------- 3 Validation approach ----------------
     b += [H(1, "Validation Approach"),
-          Para("The validation combined qualitative and quantitative assessments and was carried out through an "
-               "automated, evidence-based workflow with human sign-off:"),
+          Para("The validation is quantitative and was carried out through an automated, evidence-based workflow "
+               "with human sign-off:"),
           Numbered([
-              "**Scoping:** the objectives, metrics, limits and escalation rules of the framework were taken from the "
-              "model parameters and the monitoring policy.",
-              "**Data and documentation review:** the methodology documentation, model parameters, change log and "
-              "policy were read by deterministic review tools.",
+              "**Scoping:** the metrics, limits and escalation rules of the framework were taken from the model "
+              "parameters and the monitoring policy.",
               f"**Validation activities:** the quantitative analyses were executed by code on a validation sample of "
               f"{num(n_records)} records in {n_periods} monthly periods with known ground truth.",
               f"**AI-assisted interpretation:** an AI agent ({meta['model']}) drafted the analyses, observations and "
@@ -811,16 +686,6 @@ def assemble(ev, texts, rates, log, meta):
               "and the rating of each area was set by predefined rules.",
               "**Results and reporting:** the report was assembled automatically and is submitted to the validator "
               "for review and sign-off."]),
-          H(2, "Qualitative Validation"),
-          Para("Qualitative validation assessed the conceptual soundness, documentation, data, design, governance and "
-               "monitoring of the framework. The focus areas were:"),
-          Numbered(["Model documentation and supporting material", "Purpose, scope and intended use",
-                    "Data inputs and key matching attributes",
-                    "Search paths, match logic, scoring and decision thresholds",
-                    "Algorithm and rule review, including challenger algorithms",
-                    "Dispute and error analysis framework", "Governance and change management",
-                    "Performance monitoring"]),
-          H(2, "Quantitative Validation"),
           Para("Quantitative validation assessed the effectiveness, accuracy and stability of the algorithm through:"),
           Numbered([_cap(QUANT_SECTIONS[k]) for k in QUANT_SECTIONS]),
           Para("Each analysis states its purpose, presents the results, and ends with the analysis points, the "
@@ -828,99 +693,7 @@ def assemble(ev, texts, rates, log, meta):
                "in the Validation Summary."),
           {"type": "pagebreak"}]
 
-    # ---------------- 4 Qualitative validation ----------------
-    method_rows = [[C.FIELD_LABELS[f], cfg["method"], _weight(f), cfg["threshold"], cfg["max_distance"]]
-                   for f, cfg in C.FIELD_CONFIG.items()]
-    b += [H(1, "Qualitative Validation"),
-          Para("Qualitative validation assessed whether the S&M process is appropriately designed, documented, "
-               "implemented and governed to identify and link person records accurately while limiting false and "
-               "missed matches."),
-          H(2, "Model Development Documentation Review"),
-          Para("The documentation was reviewed for its adequacy to allow independent understanding, validation, "
-               "replication and monitoring of the model. The observations and recommendations are summarised below."),
-          _rows_table("Model documentation: observations and recommendations", la["documentation_review"]),
-          *_flag("documentation_review", un),
-          H(2, "Purpose, Scope and Uses"),
-          Para("The purpose of the S&M model is to identify and link records that belong to the same person, using "
-               f"the attributes {field_list}. It prevents duplicate subjects and ensures that information about a "
-               "person is attached to the right subject."),
-          Para("For every incoming record the model searches for candidates, scores each candidate and either merges "
-               "the record into the best candidate, sends it to manual review, or creates a new subject. The model is "
-               "designed to tolerate minor variations such as typing errors, abbreviations and missing fields while "
-               "distinguishing genuinely different people."),
-          H(2, "Data Quality"),
-          Para("The data quality review assessed the completeness and validity of the matching attributes, the "
-               "pre-processing applied before matching and the suitability of the validation data."),
-          Table("Data inputs to the model", ["Input category", "Specific data inputs", "Source"], [
-              ["Input attributes", field_list, "Incoming record"],
-              ["Search inputs", "Normalised name, Soc. Sec. ID and city of the master records", "Master repository"],
-              ["Match inputs", "Field-level similarity scores of the incoming record against each candidate",
-               "Derived by the model"],
-              ["Decision inputs", "Weighted match score, score gap, conflicts and evidence weight",
-               "Derived by the model"],
-              ["Subject repository", f"{num(ev['master_count'])} master person records", "Master repository"]]),
-          _df_table("Completeness and validity of the matching attributes", ev["quality"], list(ev["quality"].columns)),
-          Label("Assessment"), Rating(rates["data_quality"]), Para(la["data_quality_conclusion"]),
-          *_flag("data_quality_conclusion", un),
-          _rows_table("Data quality and controls: observations and recommendations", la["data_quality_rows"]),
-          *_flag("data_quality_rows", un),
-          H(2, "Model Design"),
-          Para("The model is a rule-based search, match and decision framework applied uniformly to every incoming "
-               "record. Each attribute has its own comparison method, and a record is only merged automatically when "
-               "the evidence is strong and unambiguous."),
-          H(3, "Search and Match Framework"),
-          Numbered([f"**Search:** candidates are retrieved when at least one search rule applies "
-                    f"({'; '.join(ev['methodology']['search_rules'])}); at most {C.MAX_CANDIDATES} candidates are "
-                    "scored.",
-                    "**Match:** each attribute of the incoming record is compared with the candidate using the "
-                    "method in the table below, giving a field score from 0 to 100.",
-                    "**Decision:** field scores are combined into a weighted match score, conflicts are checked, and "
-                    "the record is matched, sent to manual review, or created as a new subject."]),
-          Table("Key input attributes and matching methods",
-                ["Attribute", "Method", "Weight", "Agreement threshold", "Max. edit distance"], method_rows),
-          *_qual_result("design_framework", lb["design_framework"], un),
-          H(3, "Match Score Construction"),
-          Para("A field agrees when its similarity reaches the agreement threshold or its edit distance is within the "
-               "maximum; otherwise its score is 0. The Soc. Sec. ID is compared digit by digit ("
-               + ", ".join(f"{k} edit(s) = {v}" for k, v in C.ID_SCORE_BY_DIGIT_EDITS.items())
-               + "). The match score is the weighted average of the available field scores; missing fields are left "
-               "out and the remaining weights re-scaled."),
-          *_qual_result("score_construction", lb["score_construction"], un),
-          H(3, "Matching Threshold and Decision Logic"),
-          Table("Decision rules", ["Decision", "Rule"], [
-              ["MATCH", f"Score >= {C.MATCH_THRESHOLD}, no conflict and score gap >= {C.SCORE_GAP_THRESHOLD}"],
-              ["MANUAL REVIEW", f"Score {C.REVIEW_THRESHOLD}-{C.MATCH_THRESHOLD}, score gap < {C.SCORE_GAP_THRESHOLD}, "
-                                f"any conflict, or compared fields < {100 * C.MIN_EVIDENCE_WEIGHT:g}% of the weight"],
-              ["NO MATCH", f"Score < {C.REVIEW_THRESHOLD} or no candidate, unless strongly corroborated"]]),
-          Para("Strong corroboration: " + ev["methodology"]["strong_corroboration"] + "."),
-          Para("Conflicts: " + "; ".join(ev["methodology"]["conflict_rules"]) + "."),
-          *_qual_result("thresholds", lb["thresholds"], un),
-          H(2, "Algorithm and Rule Review"),
-          Para("Production methods: " + "; ".join(f"{C.FIELD_LABELS[f]} - {cfg['method']}"
-                                                   for f, cfg in C.FIELD_CONFIG.items())
-               + ". Challenger algorithms, each replacing one production comparator: "
-               + "; ".join(f"{k} (cut-off {v})" for k, v in C.CHALLENGER_CUTOFFS.items()) + "."),
-          *_qual_result("algorithms", lb["algorithms"], un),
-          H(2, "Dispute and Error Analysis Framework"),
-          Para("Disputes are categorised as 'does not belong to me' (an incorrect merge) and 'I already have an "
-               "account' (a missed duplicate). Exceptions - missed matches, wrong merges and manual reviews - are "
-               "assigned a primary root cause and grouped by the attributes that differ from the true record."),
-          *_qual_result("dispute_framework", lb["dispute_framework"], un),
-          H(2, "Model Governance and Change Management Review"),
-          Table("Change log", ["Version", "Date", "Change", "Impact assessed", "Approved by"],
-                [[c["version"], c["date"], c["change"], "Yes" if c["impact_assessed"] else "No",
-                  c["approved_by"] or "Not recorded"] for c in ev["change"]["change_log"]]),
-          *_qual_result("governance", lb["governance"], un),
-          H(2, "Model Monitoring Review"),
-          Table("KPI limits used for monitoring", ["KPI", "Better when", "Green", "Amber"],
-                [[P.KPI_DICTIONARY[k]["label"], t["direction"],
-                  f"{'>=' if t['direction'] == 'higher' else '<='} {pct(t['green'])}",
-                  f"{'>=' if t['direction'] == 'higher' else '<='} {pct(t['amber'])}"]
-                 for k, t in C.KPI_THRESHOLDS.items()]),
-          *_qual_result("monitoring", lb["monitoring"], un),
-          {"type": "pagebreak"}]
-
-    # ---------------- 5 Quantitative validation ----------------
+    # ---------------- 4 Quantitative validation ----------------
     sample = ev["sample"]
     b += [H(1, "Quantitative Validation"),
           Para("The quantitative validation assessed the matching accuracy, the consistency of outcomes, the error "
@@ -1007,11 +780,10 @@ def assemble(ev, texts, rates, log, meta):
         b += _quant_result(part, all_q[part], rates[part], un)
     b.append({"type": "pagebreak"})
 
-    # ---------------- 6 Validation summary ----------------
+    # ---------------- 5 Validation summary ----------------
     summary_rows = [[_cap(QUANT_SECTIONS[k]), rates[k],
                      all_q[k]["recommendation"] if (all_q[k].get("recommendation") or "-") != "-" else "-"]
                     for k in QUANT_SECTIONS]
-    summary_rows += [[_cap(QUAL_SECTIONS[k]), "-", lb[k]["recommendation"]] for k in QUAL_SECTIONS]
     b += [H(1, "Validation Summary")] + [Para(p) for p in sm["validation_summary"]] + _flag(
         "validation_summary", un) + [
         Label("Overall rating"), Rating(overall),
@@ -1019,7 +791,7 @@ def assemble(ev, texts, rates, log, meta):
         Label("Assumptions"), Bullets(ASSUMPTIONS), Label("Limitations"), Bullets(LIMITATIONS),
         {"type": "pagebreak"}]
 
-    # ---------------- 7 Sign-off and annexures ----------------
+    # ---------------- 6 Sign-off and annexures ----------------
     b += [H(1, "Validator Sign-off"),
           Para("This report was generated automatically. The validator confirms the review by recording a decision."),
           {"type": "signoff"}, {"type": "pagebreak"},

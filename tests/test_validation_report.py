@@ -39,12 +39,6 @@ def _answer(call, evidence):
             answer[part] = {"analysis": [point, "The results are consistent across periods.", "No anomaly was found."],
                             "observation": "The review indicates results in line with the rule-based assessment.",
                             "recommendation": "The model owner may consider continued monitoring."}
-        elif part in ("documentation_review", "data_quality_rows"):
-            areas = R.DOC_AREAS if part == "documentation_review" else R.DQ_AREAS
-            answer[part] = {a: {"observation": "Documented in the README.", "recommendation": "Keep it current."}
-                            for a in areas}
-        elif part in R.QUAL_SECTIONS:
-            answer[part] = {"assessment": "Reviewed.", "observation": "Documented.", "recommendation": "Keep it current."}
         elif part == "validation_summary":
             answer[part] = ["Work performed.", "Results."]
         else:
@@ -62,10 +56,9 @@ def bad_ask(call, evidence, check):
     if call == "quant_a":
         answer["performance"]["observation"] = "The hit rate was 77.7%."                 # invented number
         answer["challenger"]["analysis"][1] = "Recall improved by 12.3 pp."                # invented number
-    if call == "qual_a1":
-        answer["documentation_review"] = dict(list(answer["documentation_review"].items())[:2])  # missing areas
-    if call == "qual_b2":
-        answer["governance"]["observation"] = "See Table 3."                             # table reference
+    if call == "quant_b":
+        answer["errors"]["observation"] = "See Table 3."                                 # table reference
+        answer["disputes"]["analysis"] = ["Only one point."]                              # incomplete analysis
     return answer, "test-model", 1, check(answer)
 
 
@@ -92,7 +85,7 @@ def test_correct_answers_pass_every_check(data):
 def test_mistakes_are_caught_and_marked(data):
     report = R.build_report(*data, ask=bad_ask)
     failed = {row["part"].split(" - ")[-1] for row in report["log"] if row["result"] == R.CHECKS_NOT_PASSED}
-    assert failed == {"performance", "challenger", "documentation review", "governance"}
+    assert failed == {"performance", "challenger", "errors", "disputes"}
     notes = [b for b in report["blocks"] if b["type"] == "note"]
     assert len(notes) == 4                                   # every failed part is marked in the report
     ratings = [b["text"] for b in report["blocks"] if b["type"] == "rating"]
@@ -116,6 +109,16 @@ def test_ratings_come_from_rules(data):
     assert R.overall_rating(ev, rates) in R.OVERALL_RATINGS
 
 
+def test_calibration_ignores_tiny_recall_gains():
+    def table(alt_recall):
+        rows = [{"MATCH threshold": 85, "Current setting": True, "recall": 0.880},
+                {"MATCH threshold": 80, "Current setting": False, "recall": alt_recall}]
+        return pd.DataFrame([{"Varied": "MATCH threshold", "precision": 0.99, "incorrect_merges": 5,
+                              "review_rate": 0.05, **r} for r in rows])
+    assert R._calibration_rating(table(0.882)) == R.SAT
+    assert R._calibration_rating(table(0.880 + R.C.CALIBRATION_MIN_RECALL_GAIN)) == R.NEEDS
+
+
 def test_report_renders_as_pdf_and_word(data):
     report = R.build_report(*data, ask=good_ask)
     approval = {"reviewer": "A. Validator", "decision": "Approve", "comment": "ok", "run_at": "2026-10-26T12:00"}
@@ -123,5 +126,7 @@ def test_report_renders_as_pdf_and_word(data):
     import docx
     document = docx.Document(io.BytesIO(RD.render_full_docx(report, approval)))
     headings = [p.text for p in document.paragraphs if p.style.name.startswith("Heading")]
-    assert "1  Background" in headings and "6  Validation Summary" in headings
-    assert len(document.tables) > 20
+    assert "1  Background" in headings and "4  Quantitative Validation" in headings
+    assert "5  Validation Summary" in headings
+    assert not any("Qualitative" in h for h in headings)
+    assert len(document.tables) > 15

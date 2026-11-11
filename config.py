@@ -160,6 +160,7 @@ CHALLENGER_CUTOFFS = {
 # Threshold calibration: decisions are recomputed for these values (all other rules unchanged).
 CALIBRATION_MATCH_THRESHOLDS = [75, 80, 85, 90, 95]
 CALIBRATION_REVIEW_THRESHOLDS = [55, 60, 65, 70, 75]
+CALIBRATION_MIN_RECALL_GAIN = 0.01   # an alternative MATCH threshold is flagged only if it adds at least 1 pp recall
 
 # Data quality checks on incoming records
 ID_EXPECTED_LENGTH = 7           # FEBRL social security IDs have 7 digits

@@ -41,6 +41,9 @@ def _answer(call, evidence):
                             "recommendation": "The model owner may consider continued monitoring."}
         elif part == "validation_summary":
             answer[part] = ["Work performed.", "Results."]
+        elif part == "conclusion":
+            red = [R.A._label(b["kpi"]) for b in evidence.get("latest_period_breaches", []) if b["status"] == "Red"]
+            answer[part] = "The overall rating is driven by " + (", ".join(red) or "no breach") + "."
         else:
             answer[part] = "Adequate."
     return answer
@@ -107,6 +110,49 @@ def test_ratings_come_from_rules(data):
     rates = R.ratings(ev)
     assert set(rates.values()) <= {R.SAT, R.NEEDS}
     assert R.overall_rating(ev, rates) in R.OVERALL_RATINGS
+
+
+def test_summary_must_not_hide_breaches():
+    evidence = {"assessed_period": "Jun-26", "latest_period_breaches": [{"kpi": "review_rate", "status": "Red"},
+                                                                        {"kpi": "recall", "status": "Amber"}]}
+    hidden = R.breach_problems("conclusion", "Needs attention, while performance meets all KPI limits.", evidence)
+    assert len(hidden) == 2                                   # false claim + Red KPI not named
+    named = R.breach_problems("conclusion", "Needs attention because the manual review rate is Red.", evidence)
+    assert named == []
+    for claim in ("The model satisfied the defined limits for each metric.", "All key indicators were met.",
+                  "Every KPI is within its threshold."):
+        assert R.breach_problems("quantitative_assessment", claim, evidence), claim
+    for neutral in ("Not all limits are met.", "All key performance indicators were evaluated.",
+                    "Most indicators met their thresholds while the review rate exceeded its limit."):
+        assert R.breach_problems("quantitative_assessment", neutral, evidence) == [], neutral
+    assert R.breach_problems("conclusion", "All KPI limits are met.", {"latest_period_breaches": []}) == []
+
+
+def test_correct_figures_pass_first_time(data):
+    """Sentences the live model wrote with correct figures must not be rejected by the KPI checks."""
+    ev = R.collect(*data)
+    rates = R.ratings(ev)
+    summary = R.evidence_for("summary", ev, rates)
+    m = summary["overall_metrics_pct"]
+    text = (f"Quantitative validation shows hit rate {m['hit_rate']}%, dispute rate {m['dispute_rate']}%, "
+            f"type I error {m['type1_error']}%, type II error {m['type2_error']}%, precision {m['precision']}%, "
+            f"recall {m['recall']}% and manual review rate {m['review_rate']}%.")
+    assert R.check_answer(["quantitative_assessment"], {"quantitative_assessment": text}, summary, rates,
+                          R.NEEDS) == {}
+    quant_a = R.evidence_for("quant_a", ev, rates)
+    prod = quant_a["challenger_benchmark"][0]
+    sentence = f"Production recall is {prod['recall_pct']}% with a type-II error of {prod['type2_error_pct']}%."
+    problems = R.check_answer(["challenger"], {"challenger": {"analysis": [sentence, "Second point."],
+                                                              "observation": "-", "recommendation": "-"}},
+                              quant_a, rates, R.NEEDS)
+    assert problems == {}, problems
+
+
+def test_field_names_are_rejected():
+    problems = R.check_answer(["conclusion"], {"conclusion": "The overall_rating is driven by review_rate."},
+                              {}, {}, R.NEEDS)
+    assert any("review_rate" in p and "overall_rating" in p for p in problems["conclusion"])
+    assert R.check_answer(["conclusion"], {"conclusion": "The manual review rate drives it."}, {}, {}, R.NEEDS) == {}
 
 
 def test_calibration_ignores_tiny_recall_gains():

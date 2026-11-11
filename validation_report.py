@@ -269,7 +269,7 @@ def evidence_for(group, ev, rates, previous=None):
         return {**common, **(previous or {}),
                 "rule_based_ratings": rates, "overall_rating": overall_rating(ev, rates),
                 "latest_period_status": ev["thresholds"]["overall_status"],
-                "latest_period_breaches": ev["thresholds"]["breaches"],
+                "latest_period_breaches": [{**b, "name": A._label(b["kpi"])} for b in ev["thresholds"]["breaches"]],
                 "overall_metrics_pct": {k: _pct(ev["overall"][k]) for k in
                                         ("hit_rate", "dispute_rate", "incorrect_merge_rate", "type1_error",
                                          "type2_error", "precision", "recall", "review_rate")},
@@ -300,6 +300,7 @@ Rules:
   % sign, only for fields ending in _pct). Never calculate, estimate or round new numbers.
 - The ratings are fixed by rules (rule_based_ratings, overall_rating); your text must be consistent with them.
 - Be concise: keep strictly to the word limits.
+- Write KPI and other names in plain words ("manual review rate"), never as evidence field names ("review_rate").
 - Do not refer to table, section or annexure numbers. Do not invent documents, meetings, interviews, people or
   controls; if the evidence does not show something, say it was not evidenced.
 - The data is the public FEBRL benchmark and disputes are simulated: mention this as a limitation where relevant.
@@ -333,7 +334,8 @@ PART_INSTRUCTIONS = {
     "calibration": "effect on precision, recall, manual review and incorrect merges of raising or lowering the MATCH "
                    "and REVIEW thresholds; is the current setting a reasonable balance",
     "quantitative_assessment": "summary of the quantitative validation",
-    "conclusion": "state the overall_rating from the evidence and what it means for the continued use of the model",
+    "conclusion": "state the overall_rating, name every KPI with status Red in latest_period_breaches as the reason "
+                  "for it, and say what it means for the continued use of the model",
     "validation_summary": "work performed, main results, key findings and recommendations, overall conclusion",
 }
 
@@ -359,10 +361,38 @@ def call_instructions(parts):
     return ("Write these parts of the validation report, keeping to the word limits in the tool schema:\n"
             + "\n".join(f"- {p}: {PART_INSTRUCTIONS[p]}" for p in parts)
             + "\nAnalysis parts: 3 analysis points citing figures, an observation and a recommendation, "
-              "consistent with the rule-based rating.")
+              "consistent with the rule-based rating."
+            + ("\nIf latest_period_breaches is not empty, never write that all limits or thresholds are met."
+               if "conclusion" in parts else ""))
 
 
 REFERENCE_RE = re.compile(r"\b(?:table|section|annexure|appendix|figure)\s+\d", re.I)
+FIELD_NAME_RE = re.compile(r"\b[a-z0-9]+(?:_[a-z0-9]+)+\b", re.I)
+_CLAIM = r"(?<!not )(?<!n't )\b(?:met|meets?|meeting|satisf\w*|within|compl\w*|pass\w*)\b"
+_SCOPE = r"(?<!not )\b(?:all|each|every)\b"
+_TARGET = r"\b(?:limits?|thresholds?|metrics?|kpis?|indicators?)\b"
+ALL_LIMITS_MET_RE = re.compile(rf"{_CLAIM}[^.]{{0,40}}{_SCOPE}[^.]{{0,25}}{_TARGET}"
+                               rf"|{_SCOPE}[^.]{{0,25}}{_TARGET}[^.]{{0,40}}{_CLAIM}", re.I)
+SUMMARY_PARTS = ("quantitative_assessment", "conclusion", "validation_summary")
+
+
+def breach_problems(part, value, evidence):
+    """Summary text must not hide the latest period's breaches; the conclusion must name every Red KPI."""
+    breaches = evidence.get("latest_period_breaches") or []
+    if part not in SUMMARY_PARTS or not breaches:
+        return []
+    text = A._normalise(" ".join(t for _, t in _texts(value)))
+    problems = []
+    if ALL_LIMITS_MET_RE.search(text):
+        problems.append(f"do not claim that all limits are met: {evidence.get('assessed_period')} breaches "
+                        + ", ".join(f"{A._label(b['kpi'])} ({b['status']})" for b in breaches) + ".")
+    if part == "conclusion":
+        missing = [A._label(b["kpi"]) for b in breaches
+                   if b["status"] == "Red" and not re.search(A.KPI_PATTERNS[b["kpi"]], text, re.I)]
+        if missing:
+            problems.append(f"name the KPI(s) in Red in {evidence.get('assessed_period')} in plain words as the "
+                            f"reason for the overall rating: {', '.join(missing)}.")
+    return problems
 
 
 def _texts(obj, prefix=""):
@@ -396,9 +426,15 @@ def check_answer(parts, answer, evidence, rates, overall, extra_allowed=()):
                 add(part, f"{where}: numbers not found in the evidence: {sorted(set(numbers))}.")
             if REFERENCE_RE.search(text):
                 add(part, f"{where}: do not refer to table, section or annexure numbers.")
+            field_names = sorted(set(FIELD_NAME_RE.findall(text)))
+            if field_names:
+                add(part, f"{where}: write plain words instead of evidence field names {field_names} "
+                          "(e.g. 'manual review rate', 'overall rating').")
             pairing, direction, units = A.consistency_problems(text, [evidence], {})
             for p in pairing + direction + units:
                 add(part, f"{where}: {p}")
+        for p in breach_problems(part, value, evidence):
+            add(part, p)
         if part in QUANT_SECTIONS:
             if not isinstance(value, dict) or len(value.get("analysis") or []) < 2:
                 add(part, "give an object with at least 2 analysis points, an observation and a recommendation.")
@@ -458,7 +494,6 @@ def groq_ask(client=None, models=None):
                                "Please try again in a few minutes.")
         problems, revisions = check(answer), 0
         while problems and revisions < C.REPORT_SECTION_REVISIONS:
-            last_round = revisions == C.REPORT_SECTION_REVISIONS - 1
             failed = [p for p in parts if p in problems]
             listed = "\n".join(f"- {p}" for part in failed for p in problems[part])
             previous = json.dumps({p: answer.get(p) for p in failed})
@@ -466,11 +501,8 @@ def groq_ask(client=None, models=None):
                 previous = previous[:3000] + " ..."
             revised = request(failed, evidence, "Your previous answer for these parts was rejected by the "
                                                 f"automatic checks:\n{listed}\n\nPrevious answer:\n{previous}\n\n"
-                                                + ("Write these parts again WITHOUT quoting any numbers (the "
-                                                   "tables in the report already show them) and without "
-                                                   "referring to tables or sections."
-                                                   if last_round else
-                                                   "Write these parts again, fixing every problem listed.")) or {}
+                                                "Write these parts again, fixing every problem listed. Delete any "
+                                                "sentence you cannot fix and do not add new claims.") or {}
             revisions += 1
             answer = {**answer, **{p: revised[p] for p in failed if p in revised}}
             problems = check(answer)

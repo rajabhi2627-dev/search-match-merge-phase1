@@ -286,9 +286,9 @@ KPI_PATTERNS = {
     "hit_rate": r"hit rate",
     "precision": r"precision",
     "recall": r"recall",
-    "type1_error": r"\btype (?:i|1) error|false positive rate",
-    "type2_error": r"\btype (?:ii|2) error|false negative rate",
-    "review_rate": r"review rate",
+    "type1_error": r"\btype[\s-]?(?:i|1)[\s-]error|false positive rate",
+    "type2_error": r"\btype[\s-]?(?:ii|2)[\s-]error|false negative rate",
+    "review_rate": r"(?:manual )?review rate|manual review\b",
     "incorrect_merge_rate": r"incorrect merge rate",
     "dispute_rate": r"dispute rate",
 }
@@ -334,6 +334,9 @@ def _evidence_sets(tool_outputs):
             for key, value in obj.items():
                 if key.endswith("_pct"):
                     _numbers_in(value, percent)
+                    if isinstance(value, dict):  # e.g. overall_metrics_pct: {"hit_rate": 98.9}
+                        for k in KPI_PATTERNS:
+                            add(level[k], value.get(k))
                 walk(value)
         elif isinstance(obj, (list, tuple)):
             for v in obj:

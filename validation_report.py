@@ -218,10 +218,17 @@ def _period_kpis(periods, columns):
     return _records(periods[columns], pct_cols=V.PERCENT_COLUMNS)
 
 
+def _latest_breaches(ev):
+    t = ev["thresholds"]
+    return [{"kpi": k["kpi"], "name": k["label"], "status": k["status"], "value_pct": k["value_pct"],
+             "period": t["period"]} for k in t["kpis"] if k["status"] in ("Amber", "Red")]
+
+
 def evidence_for(group, ev, rates, previous=None):
     """The evidence pack each AI call receives (and against which its numbers are checked)."""
     common = {"assessed_period": ev["ctx"]["period"], "dataset": ev["methodology"]["dataset"],
-              "data_note": "FEBRL is a public synthetic benchmark; disputes are simulated with a fixed seed."}
+              "data_note": "FEBRL is a public synthetic benchmark; disputes are simulated with a fixed seed.",
+              "latest_period_breaches": _latest_breaches(ev)}
     if group == "quant_a":
         return {**common,
                 "rule_based_ratings": {k: rates[k] for k in ("performance", "search_path", "challenger")},
@@ -269,8 +276,7 @@ def evidence_for(group, ev, rates, previous=None):
         return {**common, **(previous or {}),
                 "rule_based_ratings": rates, "overall_rating": overall_rating(ev, rates),
                 "latest_period_status": ev["thresholds"]["overall_status"],
-                "latest_period_breaches": [{**b, "name": A._label(b["kpi"])} for b in ev["thresholds"]["breaches"]],
-                "overall_metrics_pct": {k: _pct(ev["overall"][k]) for k in
+                "all_periods_metrics_pct": {k: _pct(ev["overall"][k]) for k in
                                         ("hit_rate", "dispute_rate", "incorrect_merge_rate", "type1_error",
                                          "type2_error", "precision", "recall", "review_rate")},
                 "records_processed": ev["overall"]["records"], "matches_generated": ev["overall"]["matches_generated"],
@@ -300,6 +306,8 @@ Rules:
   % sign, only for fields ending in _pct). Never calculate, estimate or round new numbers.
 - The ratings are fixed by rules (rule_based_ratings, overall_rating); your text must be consistent with them.
 - Be concise: keep strictly to the word limits.
+- Red, Amber and "breach" describe only the latest_period_breaches values of the assessed period; never attach
+  them to figures over all periods. Ranges ("a%-b%") must span every row they describe.
 - Write KPI and other names in plain words ("manual review rate"), never as evidence field names ("review_rate").
 - Do not refer to table, section or annexure numbers. Do not invent documents, meetings, interviews, people or
   controls; if the evidence does not show something, say it was not evidenced.
@@ -323,17 +331,20 @@ PART_SCHEMAS = {**{k: QUANT_SCHEMA for k in QUANT_SECTIONS},
 
 PART_INSTRUCTIONS = {
     "performance": "hit rate and dispute rate by period against their limits, and their trend",
-    "search_path": "which search rules find the correct person (and how many only one rule finds); attribute "
-                   "contributions against the configured weights; any over-reliance on one attribute",
+    "search_path": "which search rules find the correct person (and how many matches only one rule finds - a "
+                   "count); attribute contributions are shares of the match score (not of matches) - compare them "
+                   "with the configured weights; any over-reliance on one attribute",
     "challenger": "production algorithm against each challenger on precision, recall, Type II error and incorrect "
                   "merges; is any challenger better without more incorrect merges",
     "errors": "Type I and Type II error rates by period against their limits, their trend and drivers",
     "disputes": "dispute rate, incorrect merges and missed-duplicate disputes by period against their limits",
-    "rca": "main root causes of exceptions (missed matches, manual reviews, wrong merges) and the error patterns; "
-           "data quality or matching logic",
+    "rca": "main root causes of exceptions and the error patterns; for each cause state how many cases were missed "
+           "and how many went to manual review; data quality or matching logic",
     "calibration": "effect on precision, recall, manual review and incorrect merges of raising or lowering the MATCH "
-                   "and REVIEW thresholds; is the current setting a reasonable balance",
-    "quantitative_assessment": "summary of the quantitative validation",
+                   "and REVIEW thresholds compared with the current setting (say whether each KPI rises or falls); "
+                   "is the current setting a reasonable balance",
+    "quantitative_assessment": "summary of the quantitative validation; all_periods_metrics_pct are figures over all "
+                               "periods and have no status - Red/Amber apply only to latest_period_breaches",
     "conclusion": "state the overall_rating, name every KPI with status Red in latest_period_breaches as the reason "
                   "for it, and say what it means for the continued use of the model",
     "validation_summary": "work performed, main results, key findings and recommendations, overall conclusion",
@@ -373,25 +384,152 @@ _SCOPE = r"(?<!not )\b(?:all|each|every)\b"
 _TARGET = r"\b(?:limits?|thresholds?|metrics?|kpis?|indicators?)\b"
 ALL_LIMITS_MET_RE = re.compile(rf"{_CLAIM}[^.]{{0,40}}{_SCOPE}[^.]{{0,25}}{_TARGET}"
                                rf"|{_SCOPE}[^.]{{0,25}}{_TARGET}[^.]{{0,40}}{_CLAIM}", re.I)
-SUMMARY_PARTS = ("quantitative_assessment", "conclusion", "validation_summary")
+STATUS_AFTER_VALUE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%[^.;]{0,25}?\b(red|amber|breach\w*)\b", re.I)
+LIMIT_VALUES = {round(100 * t[level], 1) for t in C.KPI_THRESHOLDS.values() for level in ("green", "amber")}
 
 
 def breach_problems(part, value, evidence):
-    """Summary text must not hide the latest period's breaches; the conclusion must name every Red KPI."""
+    """Text must not hide the latest period's breaches or put their status on other figures; the conclusion must
+    name every Red KPI."""
     breaches = evidence.get("latest_period_breaches") or []
-    if part not in SUMMARY_PARTS or not breaches:
+    if not breaches:
         return []
     text = A._normalise(" ".join(t for _, t in _texts(value)))
+    period = evidence.get("assessed_period")
     problems = []
     if ALL_LIMITS_MET_RE.search(text):
-        problems.append(f"do not claim that all limits are met: {evidence.get('assessed_period')} breaches "
+        problems.append(f"do not claim that all limits are met: {period} breaches "
                         + ", ".join(f"{A._label(b['kpi'])} ({b['status']})" for b in breaches) + ".")
+    breach_values = {b["value_pct"] for b in breaches if b.get("value_pct") is not None}
+    for m in STATUS_AFTER_VALUE_RE.finditer(text):
+        number = float(m.group(1))
+        if re.search(r"limit|threshold|target|tolerance", text[m.start():m.end() + 15], re.I):
+            continue
+        if not A._close(number, breach_values | LIMIT_VALUES):
+            problems.append(f"'{m.group(0)}': {number}% is not a breached value. Red/Amber apply only to the "
+                            f"{period} values: " + ", ".join(f"{A._label(b['kpi'])} {b['value_pct']}% "
+                                                             f"({b['status']})" for b in breaches) + ".")
     if part == "conclusion":
         missing = [A._label(b["kpi"]) for b in breaches
                    if b["status"] == "Red" and not re.search(A.KPI_PATTERNS[b["kpi"]], text, re.I)]
         if missing:
-            problems.append(f"name the KPI(s) in Red in {evidence.get('assessed_period')} in plain words as the "
-                            f"reason for the overall rating: {', '.join(missing)}.")
+            problems.append(f"name the KPI(s) in Red in {period} in plain words as the reason for the overall "
+                            f"rating: {', '.join(missing)}.")
+    return problems
+
+
+def _sentences(text):
+    return [s for s in re.split(r"(?<=[.;])\s+|\n", text) if s.strip()]
+
+
+RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%?\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*%")
+SAME_AS_PRODUCTION_RE = re.compile(r"\b(?:match\w*|equal\w*|same as|in line with|on par with)\s+(?:the\s+)?"
+                                   r"production(?:'s)?(?:\s+algorithm(?:'s)?)?\s+", re.I)
+
+
+def range_problems(part, text, evidence):
+    """A range quoted for the challengers must run from their lowest to their highest value, and a challenger said
+    to match production on a KPI must have the same value."""
+    benchmark = evidence.get("challenger_benchmark") or []
+    rows = benchmark[1:]
+    if part != "challenger" or not rows:
+        return []
+    production = benchmark[0]
+    problems = []
+    for sentence in _sentences(text):
+        for claim in SAME_AS_PRODUCTION_RE.finditer(sentence):
+            label = A.KPI_RE.match(sentence, claim.end())
+            named = [r for r in rows if r.get("algorithm") and
+                     r["algorithm"].split(" (")[0].lower() in sentence[:claim.start()].lower()]
+            if not label or not named:
+                continue
+            key = f"{label.lastgroup}_pct"
+            if named[-1].get(key) is not None and not A._close(named[-1][key], {production.get(key)}):
+                problems.append(f"'{claim.group(0)}{label.group(0)}': {named[-1]['algorithm']} has "
+                                f"{A._label(label.lastgroup)} {named[-1][key]}% against {production.get(key)}% "
+                                "for production.")
+        if not re.search(r"challenger", sentence, re.I):
+            continue
+        for m in RANGE_RE.finditer(sentence):
+            labels = list(A.KPI_RE.finditer(sentence, 0, m.start()))
+            if not labels:
+                continue
+            kpi = labels[-1].lastgroup
+            values = [r[f"{kpi}_pct"] for r in rows if r.get(f"{kpi}_pct") is not None]
+            if not values:
+                continue
+            low, high = sorted((float(m.group(1)), float(m.group(2))))
+            if not (A._close(low, {min(values)}) and A._close(high, {max(values)})):
+                problems.append(f"'{m.group(0)}': the challengers' {A._label(kpi)} ranges from {min(values)}% "
+                                f"to {max(values)}%.")
+    return problems
+
+
+CAUSE_PATTERNS = {
+    "Name replaced or very different": r"name replace|name (?:is |was )?very different|replaced name",
+    "Soc. Sec. ID mismatch": r"(?:soc\.? ?sec\.?|social security)(?: id| identification)?(?: number)? mismatch"
+                             r"|\bid mismatch",
+    "Missing Soc. Sec. ID": r"missing (?:soc\.? ?sec\.?|social security)",
+    "Missing or different Date of Birth": r"date of birth|\bdob\b",
+    "Similar customer names": r"similar (?:customer )?names",
+    "Address variation": r"address variation",
+    "Data entry errors (minor typos)": r"data entry|typo",
+}
+OUTCOME_COLUMNS = {"missed": "missed_fn", "review": "manual_review", "merge": "wrong_merge_fp"}
+OUTCOME_CLAIM_RE = re.compile(
+    r"\b(?P<scope>all|only|entirely|primarily|mainly|mostly|largely|predominantly|majority)\b[^.;]{0,25}?"
+    r"(?:(?P<missed>miss\w*|false negatives?)|(?P<merge>wrong merges?|incorrect merges?|false positives?)"
+    r"|(?P<review>manual reviews?|reviews?))", re.I)
+
+
+def root_cause_problems(part, text, evidence):
+    """'Mostly missed' / 'all manual review' claims about a root cause must match its counts."""
+    rows = {r.get("root_cause"): r for r in evidence.get("root_causes") or []}
+    if part != "rca" or not rows:
+        return []
+    problems = []
+    for sentence in _sentences(text):
+        causes = [c for c, p in CAUSE_PATTERNS.items() if c in rows and re.search(p, sentence, re.I)]
+        claim = OUTCOME_CLAIM_RE.search(sentence)
+        if not causes or not claim:
+            continue
+        row = rows[causes[0]]
+        outcome = next(k for k in OUTCOME_COLUMNS if claim.group(k))
+        count, cases = row.get(OUTCOME_COLUMNS[outcome]) or 0, row.get("number_of_cases") or 0
+        exact = claim.group("scope").lower() in ("all", "only", "entirely")
+        if (exact and count != cases) or (not exact and count * 2 <= cases):
+            problems.append(f"'{claim.group(0)}': for {causes[0]}, {row.get('missed_fn', 0)} of {cases} cases were "
+                            f"missed, {row.get('manual_review', 0)} went to manual review and "
+                            f"{row.get('wrong_merge_fp', 0)} were wrong merges.")
+    return problems
+
+
+KPI_TO_VALUE_RE = re.compile(r"(?:\s+[\w-]+){0,2}?\s+to\s+(\d+(?:\.\d+)?)\s*%")
+CLAUSE_START_RE = re.compile(r"[.;]\s|\n|\bbut\b|\bwhile\b|\bwhereas\b|\bhowever\b", re.I)
+
+
+def calibration_problems(part, text, evidence):
+    """'Raises / lowers <KPI> to x%' must match the change against the current threshold setting."""
+    current = next((r for r in evidence.get("threshold_calibration") or [] if r.get("current_setting")), None)
+    if part != "calibration" or not current:
+        return []
+    problems = []
+    for label in A.KPI_RE.finditer(text):
+        target = KPI_TO_VALUE_RE.match(text, label.end())
+        base = current.get(f"{label.lastgroup}_pct")
+        if not target or base is None:
+            continue
+        starts = [m.end() for m in CLAUSE_START_RE.finditer(text, 0, label.start())]
+        words = (list(A.DIRECTION_RE.finditer(text, label.end(), target.start(1)))
+                 or list(A.DIRECTION_RE.finditer(text, starts[-1] if starts else 0, label.start())))
+        value = float(target.group(1))
+        if not words or A._close(value, {base}):
+            continue
+        said_up = bool(words[-1].group("up"))
+        if said_up != (value > base):
+            problems.append(f"'{text[words[-1].start():target.end()]}': {A._label(label.lastgroup)} "
+                            f"{'falls' if value < base else 'rises'} from {base}% at the current setting to "
+                            f"{value}%.")
     return problems
 
 
@@ -435,6 +573,10 @@ def check_answer(parts, answer, evidence, rates, overall, extra_allowed=()):
                 add(part, f"{where}: {p}")
         for p in breach_problems(part, value, evidence):
             add(part, p)
+        joined = A._normalise("\n".join(t for _, t in _texts(value)))
+        for check in (range_problems, root_cause_problems, calibration_problems):
+            for p in check(part, joined, evidence):
+                add(part, p)
         if part in QUANT_SECTIONS:
             if not isinstance(value, dict) or len(value.get("analysis") or []) < 2:
                 add(part, "give an object with at least 2 analysis points, an observation and a recommendation.")

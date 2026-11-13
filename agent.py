@@ -289,7 +289,7 @@ KPI_PATTERNS = {
     "type1_error": r"\btype[\s-]?(?:i|1)[\s-]error|false positive rate",
     "type2_error": r"\btype[\s-]?(?:ii|2)[\s-]error|false negative rate",
     "review_rate": r"(?:manual )?review rate|manual review\b",
-    "incorrect_merge_rate": r"incorrect merge rate",
+    "incorrect_merge_rate": r"incorrect merge(?: rate|s)?\b",
     "dispute_rate": r"dispute rate",
 }
 KPI_RE = re.compile("|".join(f"(?P<{k}>{p})" for k, p in KPI_PATTERNS.items()), re.I)
@@ -374,7 +374,8 @@ def _direction(text, clause_start, number_pos, number_end):
     return None
 
 
-ATTACHED_KPI = re.compile(r"\s*(?:[\w-]+\s+){0,2}?(?:in|of|for)\s+(?:the\s+)?(?=" + KPI_RE.pattern + ")", re.I)
+ATTACHED_KPI = re.compile(r"\s*(?:(?:[\w-]+\s+){0,2}?(?:in|of|for)\s+(?:the\s+)?)?(?=" + KPI_RE.pattern + ")",
+                          re.I)
 
 
 def _label(kpi):
@@ -426,7 +427,8 @@ def consistency_problems(report, tool_outputs, ctx):
         quote = text[clause:u.end()].strip()[-150:]
         if unit == "%":
             if not _close(value, set().union(*(level[k] for k in kpis))):
-                pairing.append(f"'{quote}': {value}% is not a {names} value in the evidence.")
+                pairing.append(f"'{quote}': {value}% is not a {names} value in the evidence (if it is a count, "
+                               "write it without %).")
             continue
         if not _close(value, set().union(*(change[k] for k in kpis))):
             pairing.append(f"'{quote}': {value} pp is not a {names} change in the evidence.")

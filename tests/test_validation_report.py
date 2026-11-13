@@ -126,6 +126,56 @@ def test_summary_must_not_hide_breaches():
                     "Most indicators met their thresholds while the review rate exceeded its limit."):
         assert R.breach_problems("quantitative_assessment", neutral, evidence) == [], neutral
     assert R.breach_problems("conclusion", "All KPI limits are met.", {"latest_period_breaches": []}) == []
+    assert R.breach_problems("performance", "The model meets all KPI limits across periods.", evidence)
+
+
+JUNE = {"assessed_period": "Jun-26",
+        "latest_period_breaches": [{"kpi": "review_rate", "status": "Red", "value_pct": 32.0},
+                                   {"kpi": "recall", "status": "Amber", "value_pct": 93.3}]}
+
+
+def test_status_only_on_breached_values():
+    wrong = "Overall recall of 98.4 % (Amber breach) and manual review rate of 14.2 % (Red breach)."
+    assert len(R.breach_problems("quantitative_assessment", wrong, JUNE)) == 2
+    for right in ("In Jun-26 recall was 93.3% (Amber) and the manual review rate 32.0% (Red).",
+                  "Over all periods recall was 98.4% and the dispute rate 0.0%, well below the Red limit."):
+        assert R.breach_problems("quantitative_assessment", right, JUNE) == [], right
+
+
+def test_challenger_ranges_must_cover_every_challenger():
+    evidence = {"challenger_benchmark": [{"algorithm": "Production", "recall_pct": 98.4},
+                                         {"algorithm": "Jaro-Winkler", "recall_pct": 90.4},
+                                         {"algorithm": "Jaccard", "recall_pct": 97.5},
+                                         {"algorithm": "Levenshtein", "recall_pct": 94.2}]}
+    wrong = "All challengers show lower recall (90.4%-94.2%) than production."
+    assert R.range_problems("challenger", wrong, evidence)
+    assert R.range_problems("challenger", "All challengers show lower recall (90.4%-97.5%).", evidence) == []
+    assert R.range_problems("challenger", "Jaro-Winkler matches production recall (94.2%).", evidence)
+    assert R.range_problems("challenger", "Jaccard comes closest to production recall (97.5%).", evidence) == []
+
+
+def test_root_cause_outcomes_match_the_counts():
+    evidence = {"root_causes": [
+        {"root_cause": "Name replaced or very different", "number_of_cases": 40, "missed_fn": 2, "manual_review": 38},
+        {"root_cause": "Missing or different Date of Birth", "number_of_cases": 18, "missed_fn": 0,
+         "manual_review": 18}]}
+    for wrong in ("Name replacement or very different records cause 44.0% of exceptions, primarily missed matches.",
+                  "Missing or different Date of Birth contributes 19.8% of exceptions, all as missed matches."):
+        assert R.root_cause_problems("rca", wrong, evidence), wrong
+    for right in ("Name replacement cases went mainly to manual review (38 of 40).",
+                  "Missing or different Date of Birth cases all went to manual review."):
+        assert R.root_cause_problems("rca", right, evidence) == [], right
+
+
+def test_calibration_direction_matches_current_setting():
+    evidence = {"threshold_calibration": [
+        {"current_setting": True, "recall_pct": 98.4, "review_rate_pct": 14.2, "type2_error_pct": 1.3},
+        {"current_setting": False, "recall_pct": 99.5, "review_rate_pct": 14.8, "type2_error_pct": 0.4}]}
+    wrong = "Lowering REVIEW to 55 raises manual review rate to 14.8% and type II error to 0.4%."
+    assert len(R.calibration_problems("calibration", wrong, evidence)) == 1
+    for right in ("Lowering REVIEW to 55 raises the manual review rate to 14.8% but lowers type II error to 0.4%.",
+                  "With REVIEW at 55 recall rises to 99.5%."):
+        assert R.calibration_problems("calibration", right, evidence) == [], right
 
 
 def test_correct_figures_pass_first_time(data):
@@ -133,7 +183,7 @@ def test_correct_figures_pass_first_time(data):
     ev = R.collect(*data)
     rates = R.ratings(ev)
     summary = R.evidence_for("summary", ev, rates)
-    m = summary["overall_metrics_pct"]
+    m = summary["all_periods_metrics_pct"]
     text = (f"Quantitative validation shows hit rate {m['hit_rate']}%, dispute rate {m['dispute_rate']}%, "
             f"type I error {m['type1_error']}%, type II error {m['type2_error']}%, precision {m['precision']}%, "
             f"recall {m['recall']}% and manual review rate {m['review_rate']}%.")
@@ -146,6 +196,9 @@ def test_correct_figures_pass_first_time(data):
                                                               "observation": "-", "recommendation": "-"}},
                               quant_a, rates, R.NEEDS)
     assert problems == {}, problems
+    sentence = (f"Production records {prod['recall_pct']}% recall and {prod['type2_error_pct']}% type-II error "
+                f"with {prod['dispute_rate_pct']}% dispute rate.")
+    assert R.A.consistency_problems(sentence, [quant_a], {})[0] == []
 
 
 def test_field_names_are_rejected():

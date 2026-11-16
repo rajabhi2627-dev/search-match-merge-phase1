@@ -108,7 +108,7 @@ NO_MATCH = "NO MATCH"
 #   dataset4b.csv = 5,000 corrupted duplicates; rec-N-dup-0 is the same person as rec-N-org
 # ------------------------------------------------------------------
 DATASET_NAME = "FEBRL-4"
-SCHEMA_VERSION = "4"           # change to force the database to be rebuilt
+SCHEMA_VERSION = "5"           # change to force the database to be rebuilt
 FEBRL_DIR = DATA_DIR / "febrl"
 FEBRL_ORIGINALS = FEBRL_DIR / "dataset4a.csv"
 FEBRL_DUPLICATES = FEBRL_DIR / "dataset4b.csv"
@@ -235,6 +235,9 @@ CHANGE_LOG = [
     {"version": "2.4", "date": "2026-10-26",
      "change": "Strong-corroboration review rule and look-alike guard (validation sample: Type II error 11.1% to "
                "1.3%, incorrect merges 5 to 0, manual review rate 6.0% to 14.2%)",
+     "impact_assessed": True, "approved_by": None},
+    {"version": "2.5", "date": "2026-11-16",
+     "change": "Date of birth accepts YYYY-MM-DD only (no multi-format conversion); FEBRL YYYYMMDD converted at load",
      "impact_assessed": True, "approved_by": None},
 ]
 

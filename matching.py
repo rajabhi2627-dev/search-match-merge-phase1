@@ -40,7 +40,7 @@ ADDRESS_ABBREVIATIONS = {
     "apt": "apartment",
 }
 
-DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d %b %Y", "%d %B %Y", "%Y%m%d"]
+DOB_FORMAT = "%Y-%m-%d"   # the only accepted date-of-birth format (avoids day/month conversion errors)
 
 
 def _is_blank(value):
@@ -65,21 +65,21 @@ def normalize_id(value):
 
 
 def normalize_dob(value):
-    """Convert any supported date format to YYYY-MM-DD. Invalid or unparseable -> "" (missing).
+    """Accept only YYYY-MM-DD. Any other format or invalid calendar date -> "" (missing).
 
-    FEBRL uses YYYYMMDD. Day-first formats (DD/MM/YYYY) are assumed for slashes and dashes.
+    Other formats (DD/MM/YYYY, YYYYMMDD, etc.) are not converted here, because day/month order is
+    ambiguous and can create silent errors. FEBRL's YYYYMMDD values are converted once when the
+    data is loaded (see data_generator.to_record).
     """
     if _is_blank(value):
         return ""
     text = str(value).strip()
-    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
-        text = text[:10]
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return ""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return ""
+    try:
+        return datetime.strptime(text, DOB_FORMAT).strftime(DOB_FORMAT)
+    except ValueError:
+        return ""
 
 
 def normalize_address(value):

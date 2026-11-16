@@ -14,6 +14,7 @@ All sampling uses fixed seeds, so the data is identical on every run.
 """
 import random
 import re
+from datetime import datetime
 from functools import lru_cache
 
 import pandas as pd
@@ -46,6 +47,17 @@ def load_febrl():
     return _read(C.FEBRL_ORIGINALS), _read(C.FEBRL_DUPLICATES)
 
 
+def _febrl_dob(value):
+    """Convert FEBRL's YYYYMMDD date into the single accepted format YYYY-MM-DD. Invalid -> ''."""
+    text = _clean(value)
+    if not text or len(text) != 8 or not text.isdigit():
+        return ""
+    try:
+        return datetime.strptime(text, "%Y%m%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
 def to_record(row):
     """Map a FEBRL row onto the 5 matching fields."""
     name = " ".join(p for p in (_clean(row["given_name"]), _clean(row["surname"])) if p)
@@ -55,7 +67,7 @@ def to_record(row):
         "name": name,
         "soc_sec_id": _clean(row["soc_sec_id"]),
         "address": address,
-        "date_of_birth": _clean(row["date_of_birth"]),
+        "date_of_birth": _febrl_dob(row["date_of_birth"]),
         "city": _clean(row["suburb"]),
     }
 

@@ -93,7 +93,7 @@ def page_search(master_df, master):
             st.text_input("Soc. Sec. ID", key="in_soc_sec_id")
             st.text_input("Address", key="in_address", placeholder="street number, street, postcode")
         with col2:
-            st.text_input("Date of Birth", key="in_date_of_birth", placeholder="YYYYMMDD, YYYY-MM-DD or DD/MM/YYYY")
+            st.text_input("Date of Birth", key="in_date_of_birth", placeholder="YYYY-MM-DD only")
             st.text_input("City / Suburb", key="in_city")
         submitted = st.form_submit_button("Search & Match", type="primary")
 
@@ -358,7 +358,7 @@ National University (Christen, 2008). FEBRL-4 has 5,000 original person records 
 | Name | given_name + surname |
 | Soc. Sec. ID | soc_sec_id (strong numeric identifier, compared digit by digit) |
 | Address | street_number + address_1 + address_2 + postcode |
-| Date of birth | date_of_birth (YYYYMMDD) |
+| Date of birth | date_of_birth (YYYY-MM-DD) |
 | City | suburb |
 
 Only FEBRL's own fields are used - nothing is invented or added.
@@ -373,7 +373,7 @@ The same rules are applied to master records and incoming records.
 - **Text** (name, address, city): lowercase, trim spaces, replace punctuation with spaces, collapse multiple spaces.
 - **Address**: common street abbreviations are expanded (Rd → road, St → street, Ave → avenue, Cres → crescent, Pl → place ...).
 - **Soc. Sec. ID**: keep digits only (spaces and dashes are removed).
-- **Date of birth**: converted to `YYYY-MM-DD` (FEBRL `YYYYMMDD` and day-first formats such as 12/04/1998 are accepted). Invalid dates → missing.
+- **Date of birth**: **YYYY-MM-DD only**. Any other format (including DD/MM/YYYY and YYYYMMDD) is treated as missing, so day/month conversion cannot create silent errors. FEBRL's YYYYMMDD values are converted once when the data is loaded.
 """)
 
     st.subheader("2. Candidate search (blocking)")

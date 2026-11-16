@@ -288,7 +288,7 @@ NORMALISATION_RULES = [
     "Names, address and city: lower case, punctuation replaced by spaces, repeated spaces removed",
     "Address: common abbreviations expanded (Rd -> road, St -> street, Cres -> crescent)",
     "Soc. Sec. ID: digits only",
-    "Date of birth: converted to YYYY-MM-DD; invalid dates treated as missing",
+    "Date of birth: YYYY-MM-DD only; any other format treated as missing",
     "Missing fields are excluded from the weighted score and the remaining weights re-scaled",
 ]
 

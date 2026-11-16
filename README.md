@@ -43,7 +43,7 @@ function: `matching.match_record()`.
 | Text (name, address, city) | lowercase, trim, punctuation → space, collapse spaces |
 | Address | expand street abbreviations: Rd → road, St → street, Ave → avenue, Cres → crescent, Pl → place, … |
 | Soc. Sec. ID | digits only (spaces and dashes removed) |
-| Date of birth | convert to `YYYY-MM-DD` (`YYYYMMDD` and day-first formats accepted); invalid → missing |
+| Date of birth | **YYYY-MM-DD only**; any other format (DD/MM/YYYY, YYYYMMDD, …) → missing. FEBRL `YYYYMMDD` is converted once at load |
 
 **Candidate search**: a master record becomes a candidate if at least one rule is true:
 exact Soc. Sec. ID, similar name (WRatio ≥ 70), or same city + partly similar name (WRatio ≥ 50).

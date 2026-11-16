@@ -30,10 +30,11 @@ def test_id_normalization():
 
 
 def test_dob_normalization():
-    assert M.normalize_dob("19980412") == "1998-04-12"
-    assert M.normalize_dob("12/04/1998") == "1998-04-12"
     assert M.normalize_dob("1998-04-12") == "1998-04-12"
-    assert M.normalize_dob("19981341") == ""  # invalid date -> missing
+    assert M.normalize_dob("19980412") == ""           # FEBRL raw format is converted at load, not here
+    assert M.normalize_dob("12/04/1998") == ""         # day/month formats are rejected (ambiguous)
+    assert M.normalize_dob("04/12/1998") == ""
+    assert M.normalize_dob("1998-13-41") == ""         # invalid calendar date -> missing
     assert M.normalize_dob("not a date") == ""
 
 
